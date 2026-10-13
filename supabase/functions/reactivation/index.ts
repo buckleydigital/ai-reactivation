@@ -23,6 +23,7 @@
 //   OPENAI_API_KEY          required
 //   OPENAI_MODEL            optional, default gpt-5-mini (SMS replies)
 //   OPENAI_REALTIME_MODEL   optional, default gpt-realtime (calls)
+//   OPENAI_TTS_MODEL        optional, default gpt-4o-mini-tts (voice previews)
 //   OPENAI_PROJECT_ID       for calls: proj_... (Twilio dials it over SIP)
 //   OPENAI_WEBHOOK_SECRET   for calls: whsec_... from the OpenAI webhook
 //   TWILIO_ACCOUNT_SID      required
@@ -1306,6 +1307,9 @@ async function handleTwilioDialDone(req: Request): Promise<Response> {
 // Routes: OpenAI Realtime (inbound calls)
 // =============================================================================
 
+// OpenAI's built-in voices, the same for calls and previews.
+const VOICES = ["marin", "cedar", "alloy", "ash", "ballad", "coral", "echo", "sage", "shimmer", "verse"];
+
 const VOICE_TOOLS = [
   {
     type: "function", name: "book_callback",
@@ -1744,6 +1748,37 @@ async function handleApi(req: Request): Promise<Response> {
       return json({ ok: true });
     }
 
+    // ---- Voice preview ---------------------------------------------------------
+    // A few seconds of the chosen voice reading the campaign's own greeting,
+    // so the voice is picked by ear. Text-to-speech, not the live call model,
+    // but the same OpenAI voice.
+    case "voice_preview": {
+      adminOnly();
+      const voice = String(b.voice || "");
+      if (!VOICES.includes(voice)) throw new HttpError(400, "Unknown voice");
+      const first = clean(b.first_name, 40) || "Alex", bot = clean(b.bot_name, 40) || "Sarah";
+      const company = clean(b.company_name, 80) || "the team", service = clean(b.service, 80);
+      const text = `Hi ${first}, it's ${bot} from ${company}. Thanks so much for calling back!` +
+        (service ? ` Are you still looking into ${service}?` : " How can I help today?");
+      const r = await fetch("https://api.openai.com/v1/audio/speech", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${env("OPENAI_API_KEY")}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: env("OPENAI_TTS_MODEL", "gpt-4o-mini-tts"), voice, input: text, response_format: "mp3",
+          instructions: "Warm, friendly and natural, like a helpful receptionist answering the phone.",
+        }),
+        signal: AbortSignal.timeout(30000),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new HttpError(502, `Couldn't make a preview: ${j.error?.message || r.status}`);
+      }
+      const bytes = new Uint8Array(await r.arrayBuffer());
+      let bin = "";
+      for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      return json({ audio: `data:audio/mpeg;base64,${btoa(bin)}`, text });
+    }
+
     // ---- Billing -------------------------------------------------------------
     case "credits_checkout": {
       const client = await getClient(String(b.client_id || profile.client_id));
@@ -1903,6 +1938,7 @@ async function handleApi(req: Request): Promise<Response> {
         bot_name: String(b.bot_name || "").trim() || preset.config.bot_name,
         company_name: company,
         service: String(b.service || "").trim() || preset.config.service,
+        voice: VOICES.includes(b.voice) ? b.voice : preset.config.voice || "marin",
       };
       const { data: camp, error: ce } = await db.from("campaigns").insert({
         client_id: demo!.id, name: `Demo: ${company} (${preset.name})`, niche: preset.slug, status: "active", agent,
