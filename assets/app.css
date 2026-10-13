@@ -227,6 +227,8 @@ body.is-admin .client-only { display: none !important; }
 .event { align-self: center; display: inline-flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink2); padding: 4px 12px; border-radius: 999px; border: 1px solid var(--line); background: rgba(95, 216, 255, .04); margin: 4px 0; }
 .event.anchor { color: var(--good); border-color: rgba(61, 220, 151, .45); background: rgba(61, 220, 151, .08); font-weight: 600; }
 .event.bad { color: var(--bad); border-color: rgba(255, 93, 108, .35); }
+.due { align-self: flex-end; font-size: 12px; color: var(--ink2); padding: 6px 12px; border-radius: 999px; border: 1px dashed var(--line2); }
+.due b { color: var(--hud); font-variant-numeric: tabular-nums; }
 .typing { align-self: flex-end; display: flex; gap: 4px; padding: 12px 14px; border-radius: 16px; background: rgba(42, 120, 180, .25); border: 1px solid rgba(95, 216, 255, .2); }
 .typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--hud); animation: dot 1.2s infinite; }
 .typing i:nth-child(2) { animation-delay: .15s; }
@@ -279,7 +281,8 @@ body.is-admin .client-only { display: none !important; }
 .camp-head { display: flex; gap: 10px; align-items: flex-start; }
 .camp-head h3 { margin: 0; font-size: 15px; flex: 1; }
 .camp-sub { font-size: 12px; color: var(--ink3); }
-.funnel { display: grid; grid-template-columns: repeat(5, 1fr); gap: 6px; }
+.funnel { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; }
+.funnel .stat span { font-size: 9px; letter-spacing: .03em; }
 .bar { height: 6px; border-radius: 999px; background: rgba(95, 216, 255, .1); overflow: hidden; }
 .bar > i { display: block; height: 100%; background: linear-gradient(90deg, var(--hud), var(--good)); }
 .row-btns { display: flex; gap: 6px; flex-wrap: wrap; }

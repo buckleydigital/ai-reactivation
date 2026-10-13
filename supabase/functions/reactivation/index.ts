@@ -44,9 +44,18 @@ const SUPABASE_URL = env("SUPABASE_URL");
 const FN_BASE = `${SUPABASE_URL}/functions/v1/reactivation`;
 const OPENAI_MODEL = env("OPENAI_MODEL", "gpt-5-mini");
 const REALTIME_MODEL = env("OPENAI_REALTIME_MODEL", "gpt-realtime");
-// How long to wait for more texts before answering, so three quick texts get
-// one reply rather than three.
-const SMS_DEBOUNCE_MS = 4000;
+// How long the agent waits before answering a real text: a random 30-60s, so
+// it reads like a person picking up their phone, not a bot. If the lead texts
+// again in that time the wait starts over, so a burst of texts gets one
+// reply. Demo leads answer almost at once.
+//
+// The wait runs inside the function, after Twilio has had its response, so
+// it counts towards the function's run time (150s free plan, 400s paid). A
+// 60s wait plus a reply (usually 5-15s) fits either.
+const SMS_REPLY_DELAY_MIN_MS = Number(env("SMS_REPLY_DELAY_MIN_MS", "30000"));
+const SMS_REPLY_DELAY_MAX_MS = Number(env("SMS_REPLY_DELAY_MAX_MS", "60000"));
+const replyDelay = (demo: boolean) => demo ? 600
+  : SMS_REPLY_DELAY_MIN_MS + Math.random() * Math.max(0, SMS_REPLY_DELAY_MAX_MS - SMS_REPLY_DELAY_MIN_MS);
 // The sideband connection lives inside this function, so it can only last as
 // long as the function may run (150s on the free plan, 400s on paid). The call
 // itself carries on after that; only bookings made by voice after this point
@@ -639,6 +648,19 @@ async function checkCallback(ctx: Ctx, local: string): Promise<{ ok: true; at: D
   return { ok: true, at };
 }
 
+// Anchor 1: the first time a lead shows real interest - a positive reply,
+// calling the number back, answering the qualifying questions or agreeing a
+// callback. A "no", STOP or "wrong number" is a reply but not this.
+async function markInterested(lead: Row, channel: string, why: string) {
+  if (lead.interested_at) return;
+  const now = new Date().toISOString();
+  // Conditional, so two signals at once still log the anchor only once.
+  const { data } = await db.from("leads").update({ interested_at: now })
+    .eq("id", lead.id).is("interested_at", null).select("id");
+  lead.interested_at = now;
+  if (data?.length) await addEvent(lead, "lead_interested", { channel, why });
+}
+
 // Anchor 2.
 async function bookCallback(ctx: Ctx, at: Date, notes: string, source: "sms" | "voice" | "demo" | "manual") {
   const { lead, client } = ctx;
@@ -651,6 +673,7 @@ async function bookCallback(ctx: Ctx, at: Date, notes: string, source: "sms" | "
   await addEvent(lead, "callback_booked", { at: at.toISOString(), local: fmtLocal(at, tz), notes, source, rescheduled });
   lead.callback_at = at.toISOString();
   lead.status = "booked";
+  await markInterested(lead, source, "agreed a callback");
   if (source !== "manual") background(notifyBooking(ctx, at, notes, rescheduled));
 }
 
@@ -772,17 +795,21 @@ async function onInbound(lead: Row, body: string, messageId: string) {
   }
 
   const patch: Row = { last_inbound_at: now, last_message_at: now };
-  // Anchor 1.
+  // Every reply is recorded (reply rate, routing, unread). It is not the
+  // anchor: that waits for the agent to read it as interest.
   if (!lead.replied_at) {
     patch.replied_at = now;
     if ((STAGE[lead.status] ?? 9) < STAGE.replied) patch.status = "replied";
     await addEvent(lead, "lead_replied", { channel: lead.is_demo ? "demo" : "sms", text: body.slice(0, 300) });
   }
+  const willReply = lead.ai_enabled && !CLOSED.includes(lead.status);
+  const wait = replyDelay(!!lead.is_demo);
+  // Shown in the app as "replies in about 40s", so a person watching can
+  // pause the AI first if they'd rather answer themselves.
+  if (willReply) patch.reply_due_at = new Date(Date.now() + wait).toISOString();
   await db.from("leads").update(patch).eq("id", lead.id);
 
-  if (lead.ai_enabled && !CLOSED.includes(lead.status)) {
-    background(debouncedTurn(lead.id, messageId, lead.is_demo ? 600 : SMS_DEBOUNCE_MS));
-  }
+  if (willReply) background(debouncedTurn(lead.id, messageId, wait));
 }
 
 async function debouncedTurn(leadId: string, messageId: string, wait: number) {
@@ -798,9 +825,13 @@ async function runAgentTurn(leadId: string) {
   const ctx = await loadCtx(leadId);
   if (!ctx) return;
   const { lead, agent } = ctx;
-  if (!lead.ai_enabled || CLOSED.includes(lead.status)) return;
+  if (!lead.ai_enabled || CLOSED.includes(lead.status)) {
+    // Paused (or a team member stepped in) while it was waiting to reply.
+    if (lead.reply_due_at) await db.from("leads").update({ reply_due_at: null }).eq("id", leadId);
+    return;
+  }
 
-  await db.from("leads").update({ ai_state: "thinking" }).eq("id", leadId);
+  await db.from("leads").update({ ai_state: "thinking", reply_due_at: null }).eq("id", leadId);
   try {
     const history = chatHistory(ctx.messages);
     let feedback = "";
@@ -836,7 +867,8 @@ async function runAgentTurn(leadId: string) {
     else if (turn.disqualified) status = "disqualified";
     else if (turn.intent === "not_interested") status = "not_interested";
     else if (!booking && allRequiredAnswered(agent, q) && (STAGE[status] ?? 9) < STAGE.qualified) status = "qualified";
-    else if (["positive", "question", "booking"].includes(turn.intent) &&
+    // A question alone ("who is this?") keeps the lead where it was.
+    else if (["positive", "booking"].includes(turn.intent) &&
       ((STAGE[status] ?? 9) < STAGE.engaged || ["not_interested", "disqualified"].includes(status))) status = "engaged";
     if (status !== lead.status) {
       patch.status = status;
@@ -846,6 +878,9 @@ async function runAgentTurn(leadId: string) {
     Object.assign(lead, patch);
 
     if (turn.intent === "opt_out") await optOut(lead, "asked");
+    else if (["positive", "booking"].includes(turn.intent) || status === "qualified") {
+      await markInterested(lead, lead.is_demo ? "demo" : "sms", turn.intent === "positive" || turn.intent === "booking" ? "positive reply" : "answered the qualifying questions");
+    }
     if (booking) await bookCallback(ctx, booking, turn.callback?.notes || "", lead.is_demo ? "demo" : "sms");
 
     const reply = String(turn.reply || "").trim();
@@ -1049,6 +1084,8 @@ async function handleOpenAiCall(req: Request): Promise<Response> {
   await db.from("leads").update(patch).eq("id", leadId);
   Object.assign(ctx.lead, patch);
   await addEvent(ctx.lead, "call_started", { call_id: callRef });
+  // Calling the number back is about as clear a "yes" as a lead gives.
+  await markInterested(ctx.lead, "voice", "called back");
 
   background(runSideband(ctx, callId, callRef));
   return json({ ok: true });
@@ -1298,6 +1335,7 @@ async function handleApi(req: Request): Promise<Response> {
       if (!allowed.includes(b.status)) throw new HttpError(400, "That status can't be set by hand");
       await db.from("leads").update({ status: b.status }).eq("id", lead.id);
       await addEvent(lead, "status_changed", { from: lead.status, to: b.status, by: profile.email });
+      if (b.status === "engaged" || b.status === "qualified") await markInterested(lead, "manual", `marked ${b.status} by ${profile.email}`);
       return json({ ok: true });
     }
 
@@ -1445,6 +1483,7 @@ async function handleApi(req: Request): Promise<Response> {
       const { data: fresh } = await db.from("leads").update({
         status: "new", ai_enabled: true, ai_state: "idle", intent: null, sentiment: null, qualification: {},
         summary: null, next_action: null, callback_at: null, callback_notes: null, replied_at: null, booked_at: null,
+        interested_at: null, reply_due_at: null,
         contacted_at: null, last_inbound_at: null, last_outbound_at: null, last_message_at: null, error: null,
       }).eq("id", lead.id).select("*").single();
       const camp = await getCampaign(lead.campaign_id);
