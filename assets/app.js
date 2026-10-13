@@ -312,17 +312,18 @@ function onCall({ new: row }) {
 // Views & tabs
 // ---------------------------------------------------------------------------
 function setView(v) {
-  if (!['inbox', 'campaigns', 'clients', 'users'].includes(v)) v = 'inbox';
-  if (!S.isAdmin && (v === 'clients' || v === 'users')) v = 'inbox';
+  if (!['inbox', 'campaigns', 'clients', 'users', 'dnc'].includes(v)) v = 'inbox';
+  if (!S.isAdmin && ['clients', 'users', 'dnc'].includes(v)) v = 'inbox';
   S.view = v;
   history.replaceState(null, '', `#${v}`);
   $$('#views button').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
-  ['inbox', 'campaigns', 'clients', 'users'].forEach((x) => { $(`#view-${x}`).hidden = x !== v; });
+  ['inbox', 'campaigns', 'clients', 'users', 'dnc'].forEach((x) => { $(`#view-${x}`).hidden = x !== v; });
   document.body.classList.toggle('view-inbox', v === 'inbox');
   if (v === 'inbox') { loadLeads(); if (!S.lead) { renderChat(); renderInsights(); } }
   if (v === 'campaigns') renderCampaigns();
   if (v === 'clients') renderClients();
   if (v === 'users') renderUsers();
+  if (v === 'dnc') renderDnc();
 }
 
 function setTab(t) {
@@ -446,7 +447,8 @@ const EVENT_LABEL = {
   lead_replied: (e) => ['', 'Lead replied' + (e.data?.channel === 'voice' ? ' (called in)' : '')],
   lead_interested: (e) => ['anchor', '✓ Anchor 1 · Positive reply' + (e.data?.why && e.data.why !== 'positive reply' ? ` (${e.data.why})` : '')],
   callback_booked: (e) => ['anchor', `📅 Anchor 2 · Callback ${e.data?.rescheduled ? 'moved to' : 'booked for'} ${e.data?.local || fmtWhen(e.data?.at)}`],
-  opted_out: () => ['bad', 'Opted out: will never be messaged again'],
+  opted_out: (e) => ['bad', `Opted out (${e.data?.how === 'keyword' ? 'replied STOP' : e.data?.how || 'asked'}): will never be messaged again`],
+  opted_back_in: (e) => ['', `Taken off the do-not-contact list${e.data?.by ? ` by ${e.data.by}` : ''}`],
   ai_paused: (e) => ['', `AI paused${e.data?.by ? ` by ${e.data.by}` : ''}`],
   ai_resumed: (e) => ['', `AI resumed${e.data?.by ? ` by ${e.data.by}` : ''}`],
   status_changed: (e) => ['', `Status: ${(STATUS[e.data?.to] || [e.data?.to])[0]}`],
@@ -1019,6 +1021,151 @@ function inviteModal() {
 }
 
 // ---------------------------------------------------------------------------
+// Do Not Contact (admin)
+// One list for the shared number: nobody on it is texted, for any client.
+// ---------------------------------------------------------------------------
+const DNC_HOW = {
+  keyword: 'Replied STOP', asked: 'Asked by text', 'asked on a call': 'Asked on a call',
+  manual: 'Added by hand', import: 'Uploaded list',
+};
+S.dncSearch = '';
+
+async function loadDnc(limit = 500) {
+  let q = sb.from('opt_outs').select('*', { count: 'exact' }).order('created_at', { ascending: false }).limit(limit);
+  const digits = S.dncSearch.replace(/\D/g, '').replace(/^0/, '');
+  if (digits) q = q.ilike('phone', `%${digits}%`);
+  const { data, error, count } = await q;
+  if (error) throw error;
+  return { rows: data || [], count: count ?? (data || []).length };
+}
+
+async function renderDnc() {
+  const el = $('#view-dnc');
+  let res;
+  try { res = await loadDnc(); } catch (e) { toast(e.message, 'err'); return; }
+  const who = (r) => r.client_id ? esc(clientById(r.client_id)?.name || 'A client') : '<span class="muted">All clients</span>';
+  el.innerHTML = `<div class="page-head"><h2>Do not contact</h2><span class="pill bad">${res.count} number${res.count === 1 ? '' : 's'}</span><span class="grow"></span>
+      <button class="btn" data-act="dnc-export">Download CSV</button>
+      <button class="btn" data-act="dnc-upload">Upload list</button>
+      <button class="btn primary" data-act="dnc-add">+ Add numbers</button></div>
+    <div class="note-box" style="margin-bottom:14px">Nobody on this list is ever texted from ${esc(CFG.sharedNumber)}, for any client. They are skipped when lists are uploaded, and the AI won't answer them. Anyone who replies STOP, or asks not to be contacted, is added automatically.</div>
+    <input type="search" id="dnc-search" placeholder="Search by number" value="${esc(S.dncSearch)}" style="max-width:320px;margin-bottom:12px">
+    ${res.rows.length ? `<div class="card table-wrap"><table class="tbl"><thead><tr><th>Number</th><th>How</th><th>Opted out from</th><th>When</th><th>Note</th><th></th></tr></thead><tbody>
+      ${res.rows.map((r) => `<tr><td class="mono">${esc(fmtPhone(r.phone))}</td>
+        <td>${esc(DNC_HOW[r.reason] || r.reason || 'Opted out')}${r.added_by ? `<div class="small muted">${esc(r.added_by)}</div>` : ''}</td>
+        <td>${who(r)}</td><td class="small">${esc(fmtWhen(r.created_at))}</td><td class="small">${esc(r.note || '')}</td>
+        <td><button class="btn small ghost" data-act="dnc-remove" data-phone="${esc(r.phone)}">Remove</button></td></tr>`).join('')}
+      </tbody></table></div>${res.count > res.rows.length ? `<div class="small muted" style="margin-top:8px">Showing the latest ${res.rows.length}. Search for a number, or download the CSV for everything.</div>` : ''}`
+      : `<div class="card empty">${S.dncSearch ? 'No numbers match.' : 'The list is empty.'}</div>`}`;
+  const search = $('#dnc-search');
+  search.addEventListener('input', () => {
+    clearTimeout(renderDnc.t);
+    renderDnc.t = setTimeout(async () => { S.dncSearch = search.value; await renderDnc(); const s = $('#dnc-search'); s.focus(); s.setSelectionRange(s.value.length, s.value.length); }, 350);
+  });
+}
+
+function dncClientSelect(id) {
+  return `<label>Opted out from (optional)<select id="${id}"><option value="">Not tied to one client</option>${S.clients.filter((c) => !c.is_demo).map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('')}</select></label>`;
+}
+
+async function dncSubmit(btn, phones, clientId, note, reason) {
+  const total = { added: 0, already_listed: 0, invalid: 0, leads_stopped: 0 };
+  for (let i = 0; i < phones.length; i += 5000) {
+    if (phones.length > 5000) btn.textContent = `Adding ${Math.min(i + 5000, phones.length)} / ${phones.length}…`;
+    const r = await api('dnc_add', { phones: phones.slice(i, i + 5000), client_id: clientId || null, note, reason });
+    Object.keys(total).forEach((k) => { total[k] += r[k] || 0; });
+  }
+  closeModal();
+  modal('Do-not-contact list updated', `<dl class="kv">
+    <dt>Added</dt><dd><b>${total.added}</b></dd>
+    <dt>Already on the list</dt><dd>${total.already_listed}</dd>
+    <dt>Not a valid number</dt><dd>${total.invalid}</dd>
+    <dt>Leads stopped</dt><dd>${total.leads_stopped}</dd></dl>
+    ${total.leads_stopped ? '<div class="note-box">Those leads are marked opted out. Nothing queued will go to them and the AI won\'t reply.</div>' : ''}`,
+  '<button class="btn primary" data-act="close-modal">Done</button>');
+  renderDnc();
+}
+
+function dncAddModal() {
+  const m = modal('Add to do-not-contact', `
+    <label>Numbers (one per line, or separated by commas)<textarea id="dnc-numbers" rows="6" placeholder="0412 345 678&#10;+61498765432"></textarea></label>
+    <div class="fields">${dncClientSelect('dnc-client')}<label>Note (optional)<input id="dnc-note" placeholder="e.g. Asked by phone not to be contacted"></label></div>`,
+  `<button class="btn" data-act="close-modal">Cancel</button><button class="btn primary" id="dnc-go">Add to list</button>`);
+  $('#dnc-go', m).onclick = (e) => busy(e.target, async () => {
+    const phones = $('#dnc-numbers', m).value.split(/[\n,;]+/).map((s) => s.trim()).filter(Boolean);
+    if (!phones.length) throw new Error('Enter at least one number');
+    await dncSubmit(e.target, phones, $('#dnc-client', m).value, $('#dnc-note', m).value.trim(), 'manual');
+  });
+}
+
+function dncUploadModal() {
+  const m = modal('Upload a do-not-contact list', `
+    <div class="note-box">A CSV with a phone number column, e.g. a client's own do-not-call list. Australian numbers in any format work.</div>
+    <label>CSV file<input type="file" id="dnc-file" accept=".csv,text/csv"></label>
+    <div id="dnc-map"></div>
+    <div class="fields">${dncClientSelect('dnc-uclient')}<label>Note (optional)<input id="dnc-unote" placeholder="e.g. Client's DNC list, Oct 2026"></label></div>`,
+  `<button class="btn" data-act="close-modal">Cancel</button><button class="btn primary" id="dnc-ugo" disabled>Add to list</button>`);
+  let parsed = null;
+  $('#dnc-file', m).addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    Papa.parse(file, {
+      header: true, skipEmptyLines: 'greedy', transformHeader: (h) => h.trim(),
+      complete: (res) => {
+        parsed = res;
+        const headers = res.meta.fields || [];
+        const guess = headers.find((h) => FIELDS[0][2].test(h)) || headers[0];
+        $('#dnc-map', m).innerHTML = `<label>Phone column · ${res.data.length} rows<select id="dnc-col">${headers.map((h) => `<option ${h === guess ? 'selected' : ''}>${esc(h)}</option>`).join('')}</select></label>`;
+        $('#dnc-ugo', m).disabled = !headers.length;
+      },
+      error: (err) => toast(err.message, 'err'),
+    });
+  });
+  $('#dnc-ugo', m).onclick = (e) => busy(e.target, async () => {
+    const col = $('#dnc-col', m).value;
+    const phones = parsed.data.map((r) => String(r[col] ?? '').trim()).filter(Boolean);
+    if (!phones.length) throw new Error('That column has no numbers');
+    await dncSubmit(e.target, phones, $('#dnc-uclient', m).value, $('#dnc-unote', m).value.trim(), 'import');
+  });
+}
+
+// Removing is the one dangerous action here: texting someone who opted out
+// breaches the Spam Act. So it needs the number typed back and a reason.
+function dncRemoveModal(phone) {
+  const shown = fmtPhone(phone);
+  const m = modal('Remove from do-not-contact?', `
+    <div class="note-box" style="border-color:rgba(255,93,108,.5);color:#ffd0d5">Only do this if <b>${esc(shown)}</b> has asked to hear from you again. Messaging someone who opted out is a breach of the Spam Act. Their leads come back with the AI switched <b>off</b>; turn it on per lead if you want the agent to reply.</div>
+    <label>Why are they coming off the list?<input id="dnc-rm-reason" placeholder="e.g. Called on 14 Oct and asked for a quote"></label>
+    <label>Type the number to confirm<input id="dnc-rm-confirm" placeholder="${esc(shown)}" autocomplete="off"></label>`,
+  `<button class="btn" data-act="close-modal">Cancel</button><button class="btn danger" id="dnc-rm-go" disabled>Remove from list</button>`);
+  const check = () => {
+    const typed = $('#dnc-rm-confirm', m).value.replace(/\D/g, '').replace(/^0/, '').replace(/^61/, '');
+    const want = phone.replace(/\D/g, '').replace(/^61/, '');
+    $('#dnc-rm-go', m).disabled = !(typed === want && $('#dnc-rm-reason', m).value.trim().length >= 3);
+  };
+  m.addEventListener('input', check);
+  $('#dnc-rm-go', m).onclick = (e) => busy(e.target, async () => {
+    const r = await api('dnc_remove', { phone, reason: $('#dnc-rm-reason', m).value.trim() });
+    closeModal();
+    toast(`Removed. ${r.leads_restored} lead${r.leads_restored === 1 ? '' : 's'} restored with the AI off.`, 'ok');
+    renderDnc();
+  });
+}
+
+async function dncExport(btn) {
+  const { data, error } = await sb.from('opt_outs').select('*').order('created_at', { ascending: false }).limit(100000);
+  if (error) throw error;
+  const cell = (v) => `"${String(v ?? '').replace(/"/g, '""')}"`;
+  const lines = [['phone', 'how', 'client', 'added_by', 'note', 'opted_out_at'].join(',')]
+    .concat((data || []).map((r) => [r.phone, DNC_HOW[r.reason] || r.reason, clientById(r.client_id)?.name || '', r.added_by, r.note, r.created_at].map(cell).join(',')));
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
+  a.download = `do-not-contact-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+// ---------------------------------------------------------------------------
 // Demo
 // ---------------------------------------------------------------------------
 function demoModal() {
@@ -1126,6 +1273,10 @@ const ACT = {
   'client-new': () => clientEditor(null),
   'client-edit': (el) => clientEditor(clientById(el.dataset.id)),
   'user-invite': inviteModal,
+  'dnc-add': dncAddModal,
+  'dnc-upload': dncUploadModal,
+  'dnc-remove': (el) => dncRemoveModal(el.dataset.phone),
+  'dnc-export': (el) => busy(el, () => dncExport(el)),
   'user-delete': (el) => busy(el, async () => {
     if (!confirm('Remove this user? They will no longer be able to sign in.')) return;
     await api('delete_user', { user_id: el.dataset.id });
