@@ -337,12 +337,12 @@ function onCall({ new: row }) {
 function setView(v) {
   // Back from Stripe: credits and cards arrive by webhook a moment later.
   if (v === 'billing-done') { v = 'billing'; toast('Thanks, payment details received. It can take a few seconds to show here.', 'ok'); setTimeout(() => S.view === 'billing' && renderBilling(), 4000); }
-  if (!['inbox', 'campaigns', 'clients', 'users', 'dnc', 'billing'].includes(v)) v = 'inbox';
-  if (!S.isAdmin && ['clients', 'users', 'dnc'].includes(v)) v = 'inbox';
+  if (!['inbox', 'campaigns', 'clients', 'users', 'dnc', 'billing', 'demos'].includes(v)) v = 'inbox';
+  if (!S.isAdmin && ['clients', 'users', 'dnc', 'demos'].includes(v)) v = 'inbox';
   S.view = v;
   history.replaceState(null, '', `#${v}`);
   $$('#views button').forEach((b) => b.classList.toggle('on', b.dataset.view === v));
-  ['inbox', 'campaigns', 'clients', 'users', 'dnc', 'billing'].forEach((x) => { $(`#view-${x}`).hidden = x !== v; });
+  ['inbox', 'campaigns', 'clients', 'users', 'dnc', 'billing', 'demos'].forEach((x) => { $(`#view-${x}`).hidden = x !== v; });
   document.body.classList.toggle('view-inbox', v === 'inbox');
   if (v === 'inbox') { loadLeads(); if (!S.lead) { renderChat(); renderInsights(); } }
   if (v === 'campaigns') renderCampaigns();
@@ -350,6 +350,7 @@ function setView(v) {
   if (v === 'users') renderUsers();
   if (v === 'dnc') renderDnc();
   if (v === 'billing') renderBilling();
+  if (v === 'demos') renderDemos();
 }
 
 function setTab(t) {
@@ -1385,6 +1386,60 @@ async function renderBillingOverview(el) {
 }
 
 // ---------------------------------------------------------------------------
+// Demos (admin): bookings from demo.html, availability and blocked-out times.
+// ---------------------------------------------------------------------------
+const DEMO_STATUS = { booked: ['Booked', 'info'], completed: ['Done', 'good'], cancelled: ['Cancelled', 'mute'], no_show: ['No-show', 'bad'] };
+
+async function renderDemos() {
+  const el = $('#view-demos');
+  const now = new Date().toISOString();
+  const [up, past, set, blk] = await Promise.all([
+    sb.from('demo_requests').select('*').gte('slot_end', now).order('slot_start').limit(100),
+    sb.from('demo_requests').select('*').lt('slot_end', now).order('slot_start', { ascending: false }).limit(50),
+    sb.from('demo_settings').select('*').eq('id', 1).maybeSingle(),
+    sb.from('demo_blackouts').select('*').gt('ends_at', now).order('starts_at'),
+  ]);
+  if (up.error) { el.innerHTML = `<div class="card empty">Run 007_demo_bookings.sql first. (${esc(up.error.message)})</div>`; return; }
+  const st = set.data || {};
+  const tz = st.timezone || 'Australia/Brisbane';
+  const row = (d) => `<tr>
+    <td><b>${esc(fmtTz(d.slot_start, tz))}</b>${d.visitor_tz && d.visitor_tz !== tz ? `<div class="small muted">${esc(fmtTz(d.slot_start, d.visitor_tz))} their time</div>` : ''}</td>
+    <td><b>${esc(d.name)}</b><div class="small muted">${esc(d.business || '')}</div></td>
+    <td class="small"><a href="mailto:${esc(d.email)}">${esc(d.email)}</a>${d.phone ? `<br><a href="tel:${esc(d.phone)}">${esc(d.phone)}</a>` : ''}</td>
+    <td class="small">${esc(d.industry || '')}${d.lead_count ? `<br><span class="muted">${esc(d.lead_count)} leads</span>` : ''}</td>
+    <td class="small" style="max-width:260px">${esc(d.message || '')}</td>
+    <td><select data-act="demo-status" data-id="${d.id}">${Object.entries(DEMO_STATUS).map(([k, [l]]) => `<option value="${k}" ${k === d.status ? 'selected' : ''}>${l}</option>`).join('')}</select></td></tr>`;
+  const table = (rows, empty) => rows.length ? `<div class="card table-wrap"><table class="tbl"><thead><tr><th>When (${esc(tz.split('/').pop().replace(/_/g, ' '))})</th><th>Who</th><th>Contact</th><th>Industry</th><th>Notes</th><th>Status</th></tr></thead><tbody>${rows.map(row).join('')}</tbody></table></div>` : `<div class="card empty">${empty}</div>`;
+  const days = st.days || [1, 2, 3, 4, 5];
+  el.innerHTML = `<div class="page-head"><h2>Demos</h2><span class="pill hud">${(up.data || []).filter((d) => d.status === 'booked').length} upcoming</span><span class="grow"></span>
+      <a class="btn small" href="demo.html" target="_blank" rel="noopener">Open booking page ↗</a><button class="btn small" data-act="demos-refresh">↻ Refresh</button></div>
+    <div style="display:grid;gap:16px;max-width:1100px">
+      <div><h4 class="sec-h">Upcoming</h4>${table(up.data || [], 'No demos booked yet. Share reactivate.quoteleads.com.au/demo.html.')}</div>
+      <div class="card"><h4 class="sec-h">Your availability</h4>
+        <div class="fields">
+          <label>Timezone<select id="dm-tz">${[...new Set([tz, ...TIMEZONES])].map((t) => `<option ${t === tz ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></label>
+          <label>Alerts go to<input id="dm-email" value="${esc(st.notify_email || 'contact@quoteleads.com.au')}"></label>
+          <div class="full"><label>Days</label><div class="days" id="dm-days">${DAY_LABELS.map((d, i) => `<label><input type="checkbox" value="${i + 1}" ${days.includes(i + 1) ? 'checked' : ''}>${d}</label>`).join('')}</div></div>
+          <label>From<input type="time" id="dm-start" value="${esc(st.start_time || '09:00')}"></label>
+          <label>Until<input type="time" id="dm-end" value="${esc(st.end_time || '17:00')}"></label>
+          <label>Demo length (minutes)<input type="number" id="dm-len" min="10" max="120" step="5" value="${st.slot_minutes || 30}"></label>
+          <label>Minimum notice (hours)<input type="number" id="dm-notice" min="0" max="336" value="${st.min_notice_hours ?? 12}"></label>
+          <label>Bookable up to (days ahead)<input type="number" id="dm-horizon" min="1" max="90" value="${st.horizon_days || 21}"></label>
+        </div>
+        <div class="row-btns" style="margin-top:10px"><button class="btn primary" data-act="demos-save">Save availability</button></div>
+      </div>
+      <div class="card"><h4 class="sec-h">Blocked-out times</h4>
+        <div class="small muted" style="margin-bottom:8px">Leave, other meetings, public holidays: no demos are offered in these times. Times are in your browser's timezone.</div>
+        ${(blk.data || []).map((b) => `<div class="row-btns" style="align-items:center;margin-bottom:6px"><span class="small"><b>${esc(fmtWhen(b.starts_at))}</b> → ${esc(fmtWhen(b.ends_at))}${b.note ? ` · ${esc(b.note)}` : ''}</span><button class="btn small ghost" data-act="blackout-del" data-id="${b.id}">Remove</button></div>`).join('') || '<div class="small muted" style="margin-bottom:8px">None.</div>'}
+        <div class="inline-form" style="grid-template-columns:1fr 1fr 1fr auto;align-items:end">
+          <label>From<input type="datetime-local" id="bo-start"></label><label>Until<input type="datetime-local" id="bo-end"></label>
+          <label>Note<input id="bo-note" placeholder="e.g. On leave"></label><button class="btn" data-act="blackout-add">Block out</button></div>
+      </div>
+      <div><h4 class="sec-h">Past</h4>${table(past.data || [], 'No past demos yet.')}</div>
+    </div>`;
+}
+
+// ---------------------------------------------------------------------------
 // Demo
 // ---------------------------------------------------------------------------
 function demoModal() {
@@ -1517,6 +1572,34 @@ const ACT = {
   'client-new': () => clientEditor(null),
   'client-edit': (el) => clientEditor(clientById(el.dataset.id)),
   'user-invite': inviteModal,
+  'demos-refresh': () => renderDemos(),
+  'demos-save': (el) => busy(el, async () => {
+    const days = $$('#dm-days input:checked').map((x) => +x.value);
+    if (!days.length) throw new Error('Pick at least one day');
+    if ($('#dm-start').value >= $('#dm-end').value) throw new Error('"Until" must be after "From"');
+    const { error } = await sb.from('demo_settings').update({
+      timezone: $('#dm-tz').value, notify_email: $('#dm-email').value.trim() || 'contact@quoteleads.com.au', days,
+      start_time: $('#dm-start').value, end_time: $('#dm-end').value,
+      slot_minutes: Math.min(120, Math.max(10, +$('#dm-len').value || 30)),
+      min_notice_hours: Math.min(336, Math.max(0, +$('#dm-notice').value || 0)),
+      horizon_days: Math.min(90, Math.max(1, +$('#dm-horizon').value || 21)), updated_at: new Date().toISOString(),
+    }).eq('id', 1);
+    if (error) throw error;
+    toast('Availability saved. The booking page uses it straight away.', 'ok');
+    renderDemos();
+  }),
+  'blackout-add': (el) => busy(el, async () => {
+    const a = $('#bo-start').value, b = $('#bo-end').value;
+    if (!a || !b || new Date(b) <= new Date(a)) throw new Error('Pick a start and a later end');
+    const { error } = await sb.from('demo_blackouts').insert({ starts_at: new Date(a).toISOString(), ends_at: new Date(b).toISOString(), note: $('#bo-note').value.trim() || null });
+    if (error) throw error;
+    renderDemos();
+  }),
+  'blackout-del': (el) => busy(el, async () => {
+    const { error } = await sb.from('demo_blackouts').delete().eq('id', el.dataset.id);
+    if (error) throw error;
+    renderDemos();
+  }),
   'billing-refresh': () => renderBilling(),
   'billing-all': () => { S.clientFilter = 'all'; renderClientFilter(); renderBilling(); },
   'billing-client': (el) => { S.clientFilter = el.dataset.id; renderClientFilter(); renderCampaignFilter(); renderBilling(); },
@@ -1598,6 +1681,9 @@ document.addEventListener('change', async (e) => {
     S.campaignFilter = el.value; loadLeads();
   } else if (el.dataset.act === 'set-status' && el.value) {
     await busy(el, () => api('set_status', { lead_id: S.lead.id, status: el.value }));
+  } else if (el.dataset.act === 'demo-status') {
+    const { error } = await sb.from('demo_requests').update({ status: el.value }).eq('id', el.dataset.id);
+    toast(error ? error.message : 'Updated', error ? 'err' : 'ok');
   } else if (el.dataset.act === 'user-role') {
     const { error } = await sb.from('profiles').update({ role: el.value, ...(el.value === 'admin' ? { client_id: null } : {}) }).eq('id', el.dataset.id);
     if (error) toast(error.message, 'err'); else renderUsers();

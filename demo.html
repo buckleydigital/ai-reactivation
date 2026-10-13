@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- This page talks only to the booking endpoint on our Supabase project, and
+     to Cloudflare Turnstile (anti-spam). -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src https://vcantdssoketpxaybtwh.supabase.co; object-src 'none'; base-uri 'self'; form-action 'none'">
+<title>Book a free demo · Reactivate by QuoteLeads</title>
+<meta name="description" content="Book a free demo of Reactivate: see how we turn your old leads into booked calls, on a performance basis.">
+<meta name="theme-color" content="#04070d">
+<link rel="icon" href="favicon.ico" sizes="any">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/home.css">
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap">
+    <a class="lockup" href="./" aria-label="Reactivate by QuoteLeads, home">
+      <span class="lockup-word">Reactivate</span>
+      <span class="lockup-by">by <img src="assets/quoteleads-logo-white.png" alt="QuoteLeads" width="78" height="16"></span>
+    </a>
+    <div class="nav-cta"><a class="btn small" href="./">← Back</a><a class="btn small" href="app.html">Log in</a></div>
+  </div>
+</header>
+
+<main class="book">
+  <div class="wrap book-grid">
+    <div class="book-pitch">
+      <span class="eyebrow"><i></i>Free 30 minute demo</span>
+      <h1>See what's hiding in <span class="grad">your old leads.</span></h1>
+      <p class="lede">We'll show you the agent working in your industry, walk through how the performance model works, and tell you honestly whether your list is a good fit.</p>
+      <ul class="ticks">
+        <li><b>Nothing upfront.</b> On our performance plan you only pay at the results we agree.</li>
+        <li><b>A live demo for your industry,</b> with your kind of leads and questions.</li>
+        <li><b>A straight answer</b> on what your list could be worth, and what we need from you.</li>
+      </ul>
+    </div>
+
+    <div class="card book-card" id="book">
+      <ol class="steps"><li class="on" data-s="1">Your details</li><li data-s="2">Pick a time</li><li data-s="3">Done</li></ol>
+
+      <!-- Step 1 -->
+      <form id="step1" novalidate>
+        <div class="form-grid">
+          <label>Your name<input name="name" autocomplete="name" required maxlength="100"></label>
+          <label>Business name<input name="business" autocomplete="organization" required maxlength="120"></label>
+          <label>Email<input name="email" type="email" autocomplete="email" required maxlength="200"></label>
+          <label>Mobile<input name="phone" type="tel" autocomplete="tel" required maxlength="30" placeholder="04xx xxx xxx"></label>
+          <label>Industry<select name="industry" required>
+            <option value="">Choose…</option><option>Solar</option><option>Roofing</option><option>Mortgages</option><option>Insurance</option>
+            <option>Car finance</option><option>Claims</option><option>Dental</option><option>Cosmetic clinic</option>
+            <option>Home improvements</option><option>Ecommerce</option><option>Other</option></select></label>
+          <label>Roughly how many old leads?<select name="lead_count" required>
+            <option value="">Choose…</option><option>Under 500</option><option>500 to 2,000</option><option>2,000 to 10,000</option><option>10,000+</option><option>Not sure</option></select></label>
+          <label class="full">Anything we should know? <span class="muted">(optional)</span><textarea name="message" rows="3" maxlength="1000" placeholder="e.g. Leads from the last 18 months, mostly Facebook enquiries"></textarea></label>
+          <!-- Honeypot: hidden from people, irresistible to bots. -->
+          <label class="hp" aria-hidden="true">Website<input name="website" tabindex="-1" autocomplete="off"></label>
+          <label class="check full"><input type="checkbox" name="consent" required> <span>I agree QuoteLeads can contact me by phone, SMS and email about this demo. See our <a href="privacy.html" target="_blank" rel="noopener">Privacy Policy</a>.</span></label>
+        </div>
+        <p class="form-err" id="err1" role="alert"></p>
+        <button class="btn primary book-next" type="submit">Choose a time →</button>
+      </form>
+
+      <!-- Step 2 -->
+      <div id="step2" hidden>
+        <p class="muted tz-note" id="tz-note"></p>
+        <div class="days" id="days" role="tablist" aria-label="Day"></div>
+        <div class="times" id="times" aria-label="Time"></div>
+        <div id="turnstile" class="turnstile"></div>
+        <p class="form-err" id="err2" role="alert"></p>
+        <div class="book-actions">
+          <button class="btn" type="button" id="back1">← Back</button>
+          <button class="btn primary" type="button" id="confirm" disabled>Book my demo</button>
+        </div>
+      </div>
+
+      <!-- Step 3 -->
+      <div id="step3" hidden class="done">
+        <div class="done-badge">✓</div>
+        <h2>You're booked in!</h2>
+        <p class="done-when" id="done-when"></p>
+        <p class="muted">A confirmation with a calendar invite is on its way to <b id="done-email"></b>. Need to change it? Just reply to that email.</p>
+        <div class="book-actions" style="justify-content:center">
+          <button class="btn" type="button" id="ics">Add to calendar</button>
+          <a class="btn primary" href="./">Back to home</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<footer>
+  <div class="wrap foot">
+    <div><small>© <span id="year">2026</span> QuoteLeads · ABN 83 894 208 171</small></div>
+    <div class="contact">Prefer email? <a href="mailto:contact@quoteleads.com.au">contact@quoteleads.com.au</a></div>
+    <nav class="foot-links" aria-label="Footer"><a href="terms.html">Terms of Service</a><a href="privacy.html">Privacy Policy</a></nav>
+  </div>
+</footer>
+
+<script src="assets/demo.js"></script>
+</body>
+</html>

@@ -93,6 +93,19 @@ label > input, label > select, label > textarea { margin-top: 4px; color: var(--
 .brand-mark { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--hud); box-shadow: 0 0 14px var(--hud-dim); position: relative; flex: none; }
 .brand-mark::after { content: ''; position: absolute; inset: 3px; border-radius: 50%; background: var(--hud); }
 .form-msg { font-size: 13px; color: var(--warm); min-height: 1em; }
+.auth-back { font-size: 12.5px; color: var(--ink3); text-decoration: none; justify-self: center; }
+.auth-back:hover { color: var(--ink); }
+
+/* "Reactivate by quoteleads": the product name in Exo 2, the parent brand's
+   logo underneath (sign-in) or alongside (top bar). */
+.lockup-word { font-family: 'Exo 2', var(--sans); font-weight: 700; letter-spacing: .01em; line-height: 1; }
+.lockup-by { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink3); letter-spacing: .04em; white-space: nowrap; }
+.lockup-by img { height: 18px; width: auto; display: block; }
+.lockup { display: flex; flex-direction: column; align-items: flex-start; gap: 9px; }
+.lockup-lg .lockup-word {
+  font-size: 36px; font-weight: 800;
+  background: linear-gradient(92deg, #ffffff 10%, #9fe6ff 70%, #5fd8ff); -webkit-background-clip: text; background-clip: text; color: transparent;
+}
 
 /* ---------- Top bar ---------- */
 #app { height: 100%; display: flex; flex-direction: column; }
@@ -100,7 +113,10 @@ label > input, label > select, label > textarea { margin-top: 4px; color: var(--
   height: var(--top); flex: none; display: flex; align-items: center; gap: 16px; padding: 0 16px;
   border-bottom: 1px solid var(--line); background: rgba(5, 11, 20, .8); backdrop-filter: blur(12px); position: relative; z-index: 5;
 }
-.brand { display: flex; align-items: center; gap: 9px; font-weight: 700; letter-spacing: .02em; }
+.brand { display: flex; align-items: center; gap: 10px; flex: none; }
+.brand .lockup-word { font-size: 20px; }
+.brand-by img { height: 15px; }
+.brand-q { display: none; height: 28px; width: 28px; border-radius: 7px; }
 .views { display: flex; gap: 4px; }
 .views button { background: none; border: 0; padding: 8px 12px; border-radius: 8px; color: var(--ink2); cursor: pointer; font-weight: 500; }
 .views button:hover { color: var(--ink); background: rgba(95, 216, 255, .06); }
@@ -337,7 +353,9 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 @media (max-width: 860px) {
   :root { --top: 52px; }
   .top { gap: 8px; padding: 0 12px; }
-  .brand-name { display: none; }
+  .brand .lockup-word, .brand-by { display: none; }
+  .brand-q { display: block; }
+  .lockup-lg .lockup-word { font-size: 32px; }
   .views { overflow-x: auto; flex: 1; min-width: 0; scrollbar-width: none; }
   .top-right { flex: none; gap: 6px; }
   .top-right [data-act=demo-new] { display: none; }
@@ -385,3 +403,5 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
   *, *::before, *::after { animation-duration: .001s !important; animation-iteration-count: 1 !important; }
 }
 .tbl td.mono { white-space: nowrap; }
+
+.sec-h { margin: 0 0 10px; font-family: var(--mono); font-size: 10.5px; letter-spacing: .2em; text-transform: uppercase; color: var(--ink3); font-weight: 500; }

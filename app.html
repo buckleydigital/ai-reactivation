@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#050b14">
+<link rel="icon" href="favicon.ico" sizes="any">
+<meta name="robots" content="noindex">
+<!-- Only these sources may run code or receive data. Inline styles are allowed
+     (the app sets them); inline scripts and eval are not. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; media-src data: blob:; connect-src 'self' https://vcantdssoketpxaybtwh.supabase.co wss://vcantdssoketpxaybtwh.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'">
+<title>Reactivate by QuoteLeads · Sign in</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/app.css">
+</head>
+<body>
+
+<div id="boot" class="boot"><div class="boot-orb"></div></div>
+
+<!-- Sign in -->
+<section id="login" class="auth" hidden>
+  <form class="auth-card" id="login-form">
+    <div class="lockup lockup-lg"><span class="lockup-word">Reactivate</span><span class="lockup-by">by <img src="assets/quoteleads-logo-white.png" alt="QuoteLeads" width="88" height="18"></span></div>
+    <p class="muted">Sign in to see your leads, conversations and booked callbacks.</p>
+    <label>Email<input type="email" id="login-email" autocomplete="email" required></label>
+    <label>Password<input type="password" id="login-password" autocomplete="current-password" required></label>
+    <button class="btn primary block" type="submit">Sign in</button>
+    <button class="link" type="button" data-act="forgot">Forgot your password?</button>
+    <p class="form-msg" id="login-msg"></p>
+    <a class="auth-back" href="./">← Back to the website</a>
+  </form>
+</section>
+
+<!-- Set a password (invite or reset link) -->
+<section id="setpw" class="auth" hidden>
+  <form class="auth-card" id="setpw-form">
+    <div class="lockup lockup-lg"><span class="lockup-word">Reactivate</span><span class="lockup-by">by <img src="assets/quoteleads-logo-white.png" alt="QuoteLeads" width="88" height="18"></span></div>
+    <p class="muted">Choose a password for your account.</p>
+    <label>New password<input type="password" id="setpw-password" minlength="8" autocomplete="new-password" required></label>
+    <button class="btn primary block" type="submit">Save password</button>
+    <p class="form-msg" id="setpw-msg"></p>
+  </form>
+</section>
+
+<div id="app" hidden>
+  <header class="top">
+    <div class="brand" aria-label="Reactivate by QuoteLeads"><img class="brand-q" src="assets/quoteleads-mark.png" alt="" width="28" height="28"><span class="lockup-word">Reactivate</span><span class="lockup-by brand-by">by <img src="assets/quoteleads-logo-white.png" alt="QuoteLeads" width="73" height="15"></span></div>
+    <nav class="views" id="views">
+      <button data-view="inbox" class="on">Inbox</button>
+      <button data-view="campaigns">Campaigns</button>
+      <button data-view="clients" class="admin-only">Clients</button>
+      <button data-view="users" class="admin-only">Users</button>
+      <button data-view="dnc" class="admin-only">Do not contact</button>
+      <button data-view="billing">Billing</button>
+      <button data-view="demos" class="admin-only">Demos</button>
+    </nav>
+    <div class="top-right">
+      <select id="client-filter" class="admin-only" aria-label="Client"></select>
+      <span id="client-name" class="client-only client-chip"></span>
+      <button class="btn ghost admin-only" id="demo-toggle" data-act="toggle-demo" title="Show demo conversations">Demo mode</button>
+      <button class="btn small admin-only" data-act="demo-new">New demo</button>
+      <div class="menu">
+        <button class="avatar" id="avatar" data-act="menu" aria-label="Account"></button>
+        <div class="menu-pop" id="menu-pop" hidden>
+          <div class="menu-head" id="menu-head"></div>
+          <button data-act="signout">Sign out</button>
+        </div>
+      </div>
+    </div>
+  </header>
+  <div id="demo-ribbon" class="ribbon" hidden>Demo mode: nothing here is sent by SMS. Type as the lead to see how the agent responds.</div>
+
+  <main>
+    <section id="view-inbox" class="inbox" data-tab="list">
+      <aside class="col col-agent">
+        <div class="agent-card">
+          <div class="orb-wrap"><canvas id="orb"></canvas></div>
+          <div class="agent-meta">
+            <div class="agent-name" id="agent-name">AI Agent</div>
+            <div class="agent-role">Sales Representative</div>
+            <div class="agent-state" id="agent-state" data-state="idle"><i></i><span>Standing by</span></div>
+          </div>
+          <div class="agent-stats" id="agent-stats"></div>
+        </div>
+        <div class="list-tools">
+          <input type="search" id="lead-search" placeholder="Search name or phone">
+          <select id="campaign-filter" aria-label="Campaign"></select>
+          <div class="chips" id="status-chips"></div>
+        </div>
+        <div class="lead-list" id="lead-list"></div>
+      </aside>
+      <section class="col col-chat" id="chat"></section>
+      <aside class="col col-insights" id="insights"></aside>
+    </section>
+
+    <section id="view-campaigns" class="page" hidden></section>
+    <section id="view-clients" class="page" hidden></section>
+    <section id="view-users" class="page" hidden></section>
+    <section id="view-dnc" class="page" hidden></section>
+    <section id="view-billing" class="page" hidden></section>
+    <section id="view-demos" class="page" hidden></section>
+  </main>
+
+  <nav class="mobile-tabs" id="mobile-tabs">
+    <button data-tab="list" class="on"><span class="mt-dot"></span>Agent &amp; leads</button>
+    <button data-tab="chat">Conversation</button>
+    <button data-tab="insights">Insights</button>
+  </nav>
+</div>
+
+<div id="modal-root"></div>
+<div id="toasts" aria-live="polite"></div>
+
+<!-- Pinned to exact files: the browser refuses either one if the CDN ever
+     serves different bytes. To upgrade, change the version and the hash
+     together (sha384 of the file as published on npm). -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js" integrity="sha384-0w2KAL2YHP6wKOkUDzkCDGgVvfmHnj02DHeQ6XcHOgTfFsGyonKOpShMH1x6nk9o" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js" integrity="sha384-D/t0ZMqQW31H3az8ktEiNb39wyKnS82iFY52QPACM+IjKW3jDUhyIgh2PApRqJZs" crossorigin="anonymous"></script>
+<script src="assets/config.js"></script>
+<script src="assets/orb.js"></script>
+<script src="assets/app.js"></script>
+</body>
+</html>
