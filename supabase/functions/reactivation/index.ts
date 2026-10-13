@@ -301,17 +301,54 @@ async function openaiJSON<T = Row>(messages: Row[], name: string, schema: Row): 
   };
   // Reasoning models take an effort level; older chat models reject it.
   if (/^(gpt-5|o\d)/.test(OPENAI_MODEL)) body.reasoning_effort = env("OPENAI_REASONING_EFFORT", "low");
-  const r = await fetch("https://api.openai.com/v1/chat/completions", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(60000),
-  });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(`OpenAI: ${j.error?.message || r.status}`);
-  const content = j.choices?.[0]?.message?.content;
-  if (!content) throw new Error("OpenAI returned no content" + (j.choices?.[0]?.message?.refusal ? `: ${j.choices[0].message.refusal}` : ""));
-  return cleanDeep(JSON.parse(content)) as T;
+
+  // One retry: a timeout, a 5xx/429 or an unreadable answer is usually fine
+  // on the second go, and the alternative is a lead left without a reply.
+  let lastErr: Error = new Error("OpenAI failed");
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt) await sleep(800);
+    try {
+      const r = await fetch("https://api.openai.com/v1/chat/completions", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+        signal: AbortSignal.timeout(45000),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        lastErr = new Error(`OpenAI: ${j.error?.message || r.status}`);
+        if (r.status >= 500 || r.status === 429) continue;
+        throw lastErr; // a 4xx (bad key, bad request) won't fix itself
+      }
+      const msg = j.choices?.[0]?.message || {};
+      const parsed = readJSON(msg.content, schema) ??
+        // The answer sometimes comes back in the refusal field instead of
+        // content, prefixed with "json". Take it if it's the object we asked
+        // for; a genuine refusal won't parse into that shape.
+        readJSON(msg.refusal, schema);
+      if (parsed) return cleanDeep(parsed) as T;
+      lastErr = new Error(`OpenAI returned no usable answer (finish: ${j.choices?.[0]?.finish_reason || "?"})` +
+        (msg.refusal ? `: ${String(msg.refusal).slice(0, 200)}` : ""));
+    } catch (e) {
+      if (e === lastErr) throw e;
+      lastErr = e as Error;
+    }
+  }
+  throw lastErr;
+}
+
+// The JSON object in a model's answer, if it has every key the schema needs.
+function readJSON(text: unknown, schema: Row): Row | null {
+  if (typeof text !== "string") return null;
+  const i = text.indexOf("{"), k = text.lastIndexOf("}");
+  if (i < 0 || k < i) return null;
+  try {
+    const v = JSON.parse(text.slice(i, k + 1));
+    if (!v || typeof v !== "object" || Array.isArray(v)) return null;
+    return arr<string>(schema.required).every((key) => key in v) ? v : null;
+  } catch {
+    return null;
+  }
 }
 
 async function openaiPost(path: string, body: Row): Promise<Response> {
