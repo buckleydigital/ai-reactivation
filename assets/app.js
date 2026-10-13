@@ -187,7 +187,7 @@ const visibleClients = () => S.clients.filter((c) => !!c.is_demo === S.demo && (
 
 async function loadLeads() {
   let q = sb.from('leads')
-    .select('id,client_id,campaign_id,first_name,last_name,phone,status,ai_enabled,ai_state,last_message_at,last_inbound_at,replied_at,booked_at,callback_at,service,is_demo,created_at')
+    .select('id,client_id,campaign_id,first_name,last_name,phone,status,ai_enabled,ai_state,last_message_at,last_inbound_at,replied_at,interested_at,booked_at,callback_at,reply_due_at,service,is_demo,created_at')
     .eq('is_demo', S.demo)
     .order('last_message_at', { ascending: false, nullsFirst: false })
     .order('created_at', { ascending: false })
@@ -292,11 +292,10 @@ function onMessageChange({ eventType, new: row }) {
 }
 
 function onEvent({ new: row }) {
-  if (row.type === 'callback_booked' || row.type === 'lead_replied') {
-    const l = S.leads.find((x) => x.id === row.lead_id);
-    if (l && row.type === 'callback_booked') toast(`📅 Callback booked: ${fullName(l)}, ${row.data?.local || ''}`, 'ok');
-    if (l && row.type === 'lead_replied' && S.lead?.id !== row.lead_id) toast(`💬 ${fullName(l)} replied`, 'ok');
-  }
+  const l = S.leads.find((x) => x.id === row.lead_id);
+  if (l && row.type === 'callback_booked') toast(`📅 Callback booked: ${fullName(l)}, ${row.data?.local || ''}`, 'ok');
+  if (l && row.type === 'lead_interested') toast(`🔥 ${fullName(l)} is interested`, 'ok');
+  if (l && row.type === 'lead_replied' && S.lead?.id !== row.lead_id) toast(`💬 ${fullName(l)} replied`);
   if (!S.lead || row.lead_id !== S.lead.id) return;
   if (!S.events.some((e) => e.id === row.id)) S.events.push(row);
   renderChat({ scroll: true });
@@ -364,6 +363,7 @@ function renderAgent() {
   else if (onCall.length) { state = 'speaking'; label = `On a call with ${onCall[0].first_name || 'a lead'}`; }
   else if (thinking.length) { state = 'busy'; label = thinking.length > 1 ? `Writing ${thinking.length} replies…` : `Writing to ${thinking[0].first_name || 'a lead'}…`; }
   else if (sel && !sel.ai_enabled) label = 'Paused for this lead';
+  else if (sel && dueIn(sel) > 0) label = `Replying to ${sel.first_name || 'lead'} shortly`;
   S.orb?.set(state);
   document.body.dataset.agent = state;
   const st = $('#agent-state');
@@ -376,13 +376,13 @@ function renderAgent() {
   const ids = new Set(visibleClients().map((c) => c.id));
   const rows = S.stats.filter((r) => ids.has(r.client_id) && (!S.campaignFilter || r.campaign_id === S.campaignFilter));
   const sum = (k) => rows.reduce((a, r) => a + (r[k] || 0), 0);
-  const contacted = sum('contacted'), replied = sum('replied'), booked = sum('booked');
-  const rate = contacted ? Math.round(replied / contacted * 100) : 0;
+  const contacted = sum('contacted'), replied = sum('replied'), interested = sum('interested'), booked = sum('booked');
+  const pct = (a) => (contacted ? ` title="${Math.round(a / contacted * 100)}% of leads texted"` : '');
   $('#agent-stats').innerHTML = `
     <div class="stat"><b>${contacted}</b><span>Texted</span></div>
-    <div class="stat hud"><b>${replied}</b><span>Replied</span></div>
-    <div class="stat"><b>${rate}%</b><span>Reply rate</span></div>
-    <div class="stat good"><b>${booked}</b><span>Booked</span></div>`;
+    <div class="stat"${pct(replied)}><b>${replied}</b><span>Replied</span></div>
+    <div class="stat hud"${pct(interested)}><b>${interested}</b><span>Interested</span></div>
+    <div class="stat good"${pct(booked)}><b>${booked}</b><span>Booked</span></div>`;
 }
 
 function renderLeadList() {
@@ -443,7 +443,8 @@ function renderChatHead() {
 }
 
 const EVENT_LABEL = {
-  lead_replied: (e) => ['anchor', '✓ Anchor 1 · Lead replied' + (e.data?.channel === 'voice' ? ' (called in)' : '')],
+  lead_replied: (e) => ['', 'Lead replied' + (e.data?.channel === 'voice' ? ' (called in)' : '')],
+  lead_interested: (e) => ['anchor', '✓ Anchor 1 · Positive reply' + (e.data?.why && e.data.why !== 'positive reply' ? ` (${e.data.why})` : '')],
   callback_booked: (e) => ['anchor', `📅 Anchor 2 · Callback ${e.data?.rescheduled ? 'moved to' : 'booked for'} ${e.data?.local || fmtWhen(e.data?.at)}`],
   opted_out: () => ['bad', 'Opted out: will never be messaged again'],
   ai_paused: (e) => ['', `AI paused${e.data?.by ? ` by ${e.data.by}` : ''}`],
@@ -486,15 +487,34 @@ function renderThread() {
   renderTyping();
 }
 
+// Seconds until the agent answers the lead's latest text (real SMS waits a
+// random 30-60s so it reads like a person; demos answer at once).
+function dueIn(l) {
+  if (!l?.reply_due_at || !l.ai_enabled || l.ai_state !== 'idle') return 0;
+  return Math.max(0, Math.round((new Date(l.reply_due_at) - Date.now()) / 1000));
+}
+
 function renderTyping() {
   const t = $('#thread');
   if (!t) return;
   t.querySelector('.typing')?.remove();
+  t.querySelector('.due')?.remove();
   if (S.lead?.ai_state === 'thinking') {
     t.insertAdjacentHTML('beforeend', '<div class="typing" title="The agent is writing"><i></i><i></i><i></i></div>');
     t.scrollTop = t.scrollHeight;
+  } else if (dueIn(S.lead) > 2) {
+    const bot = campaignById(S.lead.campaign_id)?.agent?.bot_name || 'The agent';
+    t.insertAdjacentHTML('beforeend', `<div class="due">${esc(bot)} replies in about <b>${dueIn(S.lead)}s</b>. Pause the AI to answer yourself.</div>`);
+    t.scrollTop = t.scrollHeight;
   }
 }
+// Tick the countdown without re-rendering the whole thread.
+setInterval(() => {
+  const el = document.querySelector('#thread .due b');
+  if (!el) return;
+  const n = dueIn(S.lead);
+  if (n > 2) el.textContent = `${n}s`; else renderTyping();
+}, 1000);
 
 function renderComposer() {
   const el = $('#composer');
@@ -548,7 +568,7 @@ function renderInsights() {
     <div>
       <h4>Anchors</h4>
       <div class="anchors">
-        <div class="anchor ${l.replied_at ? 'done' : ''}"><div class="n">01</div><b>${l.replied_at ? 'Lead replied' : 'Awaiting reply'}</b><small>${l.replied_at ? fmtWhen(l.replied_at) : l.contacted_at ? `Texted ${ago(l.contacted_at)} ago` : 'Not texted yet'}</small></div>
+        <div class="anchor ${l.interested_at ? 'done' : ''}"><div class="n">01</div><b>${l.interested_at ? 'Positive reply' : l.replied_at ? 'Replied, not interested yet' : 'Awaiting reply'}</b><small>${l.interested_at ? fmtWhen(l.interested_at) : l.replied_at ? `Replied ${fmtWhen(l.replied_at)}` : l.contacted_at ? `Texted ${ago(l.contacted_at)} ago` : 'Not texted yet'}</small></div>
         <div class="anchor ${l.callback_at ? 'done' : ''}"><div class="n">02</div><b>${l.callback_at ? 'Callback booked' : 'No callback yet'}</b><small>${l.callback_at ? esc(fmtTz(l.callback_at, tz)) : 'The agent books this'}</small></div>
       </div>
     </div>
@@ -644,10 +664,11 @@ function campaignCard(c) {
       <div class="stat"><b>${st.total || 0}</b><span>Leads</span></div>
       <div class="stat"><b>${st.pending || 0}</b><span>To send</span></div>
       <div class="stat"><b>${st.contacted || 0}</b><span>Texted</span></div>
-      <div class="stat hud"><b>${st.replied || 0}</b><span>Replied</span></div>
+      <div class="stat"><b>${st.replied || 0}</b><span>Replied</span></div>
+      <div class="stat hud"><b>${st.interested || 0}</b><span>Interested</span></div>
       <div class="stat good"><b>${st.booked || 0}</b><span>Booked</span></div>
     </div>
-    <div class="small muted">Reply rate ${pct(st.replied, st.contacted)}% · Booking rate ${pct(st.booked, st.replied)}% of replies${st.opted_out ? ` · ${st.opted_out} opted out` : ''}${st.failed ? ` · ${st.failed} failed` : ''}</div>
+    <div class="small muted">Reply rate ${pct(st.replied, st.contacted)}% · Interest rate ${pct(st.interested, st.contacted)}% · ${pct(st.booked, st.interested)}% of interested booked${st.opted_out ? ` · ${st.opted_out} opted out` : ''}${st.failed ? ` · ${st.failed} failed` : ''}</div>
     <div class="bar"><i style="width:${pct(st.contacted, st.total)}%"></i></div>
     <div class="row-btns">
       <button class="btn small" data-act="campaign-leads" data-id="${c.id}">View leads</button>
