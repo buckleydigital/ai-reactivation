@@ -4,11 +4,11 @@
 'use strict';
 
 const API = 'https://vcantdssoketpxaybtwh.supabase.co/functions/v1/reactivation/public';
-// Cloudflare Turnstile (anti-spam), the same widget as QuoteLeadsHQ. Public
-// by design. The server only insists on it once CF_TURNSTILE_SECRET is set;
-// if the widget can't load (e.g. this domain isn't added in Cloudflare yet)
-// it hides itself and the form still works.
-const TURNSTILE_SITE_KEY = '0x4AAAAAAC0NesB-x2tZ3YhC';
+// Cloudflare Turnstile (anti-spam): Reactivate's own widget. The site key is
+// public by design; its secret is the CF_TURNSTILE_SECRET edge function
+// secret, and the two must belong to the same widget or every booking fails
+// the check.
+const TURNSTILE_SITE_KEY = '0x4AAAAAABj4xsGpuNPXeW_7';
 
 const $ = (s) => document.querySelector(s);
 const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'Australia/Brisbane';
