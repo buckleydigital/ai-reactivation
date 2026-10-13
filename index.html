@@ -20,6 +20,29 @@
 <link rel="stylesheet" href="assets/home.css">
 </head>
 <body>
+<!-- Line icons (one sprite, used as <svg class="i"><use href="#i-name"/></svg>). -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
+  <symbol id="i-play" viewBox="0 0 24 24"><polygon points="7 4 20 12 7 20 7 4"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+  <symbol id="i-cal" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/><path d="m9 16 2 2 4-4"/></symbol>
+  <symbol id="i-anchor" viewBox="0 0 24 24"><circle cx="12" cy="5" r="3"/><path d="M12 22V8M5 12H2a10 10 0 0 0 20 0h-3"/></symbol>
+  <symbol id="i-replay" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3.1 19.5 19.5 0 0 1-6-6A19.8 19.8 0 0 1 2.1 4.2 2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7c.1.9.4 1.8.7 2.7a2 2 0 0 1-.5 2.1L8 9.8a16 16 0 0 0 6 6l1.3-1.3a2 2 0 0 1 2.1-.4c.9.3 1.8.6 2.7.7a2 2 0 0 1 1.7 2z"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></symbol>
+  <symbol id="i-user-check" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="m16 11 2 2 4-4"/></symbol>
+  <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></symbol>
+  <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></symbol>
+  <symbol id="i-sun" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41"/></symbol>
+  <symbol id="i-home" viewBox="0 0 24 24"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></symbol>
+  <symbol id="i-bank" viewBox="0 0 24 24"><path d="M3 22h18M6 18v-7M10 18v-7M14 18v-7M18 18v-7M4 9l8-6 8 6z"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></symbol>
+  <symbol id="i-car" viewBox="0 0 24 24"><path d="M5 11l1.6-4.4A2 2 0 0 1 8.5 5h7a2 2 0 0 1 1.9 1.6L19 11"/><rect x="3" y="11" width="18" height="6" rx="2"/><circle cx="7.5" cy="17" r="1.8"/><circle cx="16.5" cy="17" r="1.8"/></symbol>
+  <symbol id="i-scale" viewBox="0 0 24 24"><path d="M12 3v18M7 21h10M4 7h16"/><path d="M7 7l-3.5 7a3.5 3.5 0 0 0 7 0z"/><path d="M17 7l-3.5 7a3.5 3.5 0 0 0 7 0z"/></symbol>
+  <symbol id="i-smile" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/></symbol>
+  <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></symbol>
+  <symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></symbol>
+  <symbol id="i-cart" viewBox="0 0 24 24"><circle cx="8" cy="21" r="1"/><circle cx="19" cy="21" r="1"/><path d="M2 2h2l2.7 12.4a2 2 0 0 0 2 1.6h9.7a2 2 0 0 0 2-1.6L22 7H5.1"/></symbol>
+</defs></svg>
 
 <header class="nav">
   <div class="wrap">
@@ -46,12 +69,12 @@
   <section class="hero">
     <div class="wrap">
       <div>
-        <span class="eyebrow"><i></i>Performance-based lead reactivation</span>
+        <span class="eyebrow"><i></i>AI lead reactivation</span>
         <h1>Got old leads?<br><span class="grad">Let AI turn them into sales.</span></h1>
         <p class="lede">Your old enquiries are sitting in a spreadsheet doing nothing. We use <b>AI and SMS</b> to bring them back, qualify them and book them in with your team. And we do it on <b>performance</b>: nothing upfront, and you only pay at the results we agree. <b>If we don't deliver, you don't pay.</b></p>
         <div class="hero-cta">
           <a class="btn primary" href="demo.html">Book a free demo →</a>
-          <a class="btn" href="#demo-section">▶ Watch it work</a>
+          <a class="btn" href="#demo-section"><svg class="i" aria-hidden="true"><use href="#i-play"/></svg>Watch it work</a>
         </div>
         <div class="trust"><span>Nothing upfront</span><span>Pay only for agreed results</span><span>Compliance built in</span></div>
       </div>
@@ -59,8 +82,8 @@
         <canvas id="hero-orb"></canvas>
         <div class="float ai f1">Hi Michelle, it's Sarah from Acme Solar. Still looking into solar panels?</div>
         <div class="float lead f2">Yes! We put it off over winter</div>
-        <div class="float tag f3">✓ Positive reply</div>
-        <div class="float tag f4">📅 Callback booked · Thu 2:30pm</div>
+        <div class="float tag f3"><svg class="i" aria-hidden="true"><use href="#i-check"/></svg>Positive reply</div>
+        <div class="float tag f4"><svg class="i" aria-hidden="true"><use href="#i-cal"/></svg>Callback booked · Thu 2:30pm</div>
       </div>
     </div>
   </section>
@@ -75,7 +98,7 @@
       </div>
       <div class="grid3">
         <div class="card deal"><div class="deal-n">$0</div><h3>Nothing upfront</h3><p>We set everything up and run your campaign before you spend a cent. You see the results first.</p></div>
-        <div class="card deal"><div class="deal-n">⚓</div><h3>Paid at agreed anchor points</h3><p>Before we start, we agree exactly what you pay on, like a lead booking a call with your team. Those are our anchor points.</p></div>
+        <div class="card deal"><div class="deal-n deal-ic"><svg class="i" aria-hidden="true"><use href="#i-anchor"/></svg></div><h3>Paid at agreed anchor points</h3><p>Before we start, we agree exactly what you pay on, like a lead booking a call with your team. Those are our anchor points.</p></div>
         <div class="card deal"><div class="deal-n">0%</div><h3>Zero upfront risk</h3><p>If the campaign doesn't hit an anchor point, you don't pay. Every result is tracked live in your dashboard, and you can dispute any booking within 48 hours.</p></div>
       </div>
     </div>
@@ -134,7 +157,7 @@
             <button class="tab" data-k="mortgages">Mortgages</button>
             <button class="tab" data-k="car-finance">Car finance</button>
           </div>
-          <button class="btn small demo-replay" data-replay>↻ Replay</button>
+          <button class="btn small demo-replay" data-replay><svg class="i" aria-hidden="true"><use href="#i-replay"/></svg>Replay</button>
         </div>
         <div class="demo-grid">
           <aside class="demo-agent">
@@ -198,12 +221,12 @@
       <h2>A top sales rep that never stops following up</h2>
       <p class="section-lede">Everything happens in your own dashboard, live.</p>
       <div class="grid3">
-        <div class="card"><div class="icon">⚓</div><h3>Anchor points, tracked live</h3><p>See the moment a lead replies positively and the moment a call is booked. It's exactly what you pay on, so there's never a debate.</p></div>
-        <div class="card"><div class="icon">📞</div><h3>Answers when they call back</h3><p>If a lead rings the number instead of texting, a voice agent answers, qualifies them and books the call.</p></div>
-        <div class="card"><div class="icon">⏱️</div><h3>Feels human</h3><p>Replies wait 30 to 60 seconds, ask one question at a time and never sound like a script.</p></div>
-        <div class="card"><div class="icon">🙋</div><h3>Step in any time</h3><p>Watch every conversation live. Type a reply yourself and the agent steps back for that lead.</p></div>
-        <div class="card"><div class="icon">🎯</div><h3>Your questions, your rules</h3><p>Set the qualifying questions, the tone, what rules a lead out and what the agent must never say.</p></div>
-        <div class="card"><div class="icon">🔔</div><h3>Instant booking alerts</h3><p>Every booked call lands on your phone and in your inbox, with the lead's answers and a summary.</p></div>
+        <div class="card"><div class="icon"><svg class="i" aria-hidden="true"><use href="#i-anchor"/></svg></div><h3>Anchor points, tracked live</h3><p>See the moment a lead replies positively and the moment a call is booked. It's exactly what you pay on, so there's never a debate.</p></div>
+        <div class="card"><div class="icon"><svg class="i" aria-hidden="true"><use href="#i-phone"/></svg></div><h3>Answers when they call back</h3><p>If a lead rings the number instead of texting, a voice agent answers, qualifies them and books the call.</p></div>
+        <div class="card"><div class="icon"><svg class="i" aria-hidden="true"><use href="#i-clock"/></svg></div><h3>Feels human</h3><p>Replies wait 30 to 60 seconds, ask one question at a time and never sound like a script.</p></div>
+        <div class="card"><div class="icon"><svg class="i" aria-hidden="true"><use href="#i-user-check"/></svg></div><h3>Step in any time</h3><p>Watch every conversation live. Type a reply yourself and the agent steps back for that lead.</p></div>
+        <div class="card"><div class="icon"><svg class="i" aria-hidden="true"><use href="#i-target"/></svg></div><h3>Your questions, your rules</h3><p>Set the qualifying questions, the tone, what rules a lead out and what the agent must never say.</p></div>
+        <div class="card"><div class="icon"><svg class="i" aria-hidden="true"><use href="#i-bell"/></svg></div><h3>Instant booking alerts</h3><p>Every booked call lands on your phone and in your inbox, with the lead's answers and a summary.</p></div>
       </div>
     </div>
   </section>
@@ -215,9 +238,9 @@
       <h2>Built for businesses with enquiries</h2>
       <p class="section-lede">Each industry starts with its own script, questions and compliance guardrails, tailored to you.</p>
       <div class="chips">
-        <span class="chip">☀️ Solar</span><span class="chip">🏠 Roofing</span><span class="chip">🏦 Mortgages</span><span class="chip">🛡️ Insurance</span>
-        <span class="chip">🚗 Car finance</span><span class="chip">⚖️ Claims</span><span class="chip">🦷 Dental</span><span class="chip">✨ Cosmetic clinics</span>
-        <span class="chip">🔨 Home improvements</span><span class="chip">🛒 Ecommerce</span>
+        <span class="chip"><svg class="i" aria-hidden="true"><use href="#i-sun"/></svg>Solar</span><span class="chip"><svg class="i" aria-hidden="true"><use href="#i-home"/></svg>Roofing</span><span class="chip"><svg class="i" aria-hidden="true"><use href="#i-bank"/></svg>Mortgages</span><span class="chip"><svg class="i" aria-hidden="true"><use href="#i-shield"/></svg>Insurance</span>
+        <span class="chip"><svg class="i" aria-hidden="true"><use href="#i-car"/></svg>Car finance</span><span class="chip"><svg class="i" aria-hidden="true"><use href="#i-scale"/></svg>Claims</span><span class="chip"><svg class="i" aria-hidden="true"><use href="#i-smile"/></svg>Dental</span><span class="chip"><svg class="i" aria-hidden="true"><use href="#i-sparkles"/></svg>Cosmetic clinics</span>
+        <span class="chip"><svg class="i" aria-hidden="true"><use href="#i-wrench"/></svg>Home improvements</span><span class="chip"><svg class="i" aria-hidden="true"><use href="#i-cart"/></svg>Ecommerce</span>
       </div>
     </div>
   </section>

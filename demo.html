@@ -16,6 +16,7 @@
 <link rel="stylesheet" href="assets/home.css">
 </head>
 <body>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs><symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol></defs></svg>
 
 <header class="nav">
   <div class="wrap">
@@ -79,8 +80,8 @@
       </div>
 
       <!-- Step 3 -->
-      <div id="step3" hidden class="done">
-        <div class="done-badge">✓</div>
+      <div id="step3" hidden class="book-done">
+        <div class="done-badge"><svg class="i" aria-hidden="true"><use href="#i-check"/></svg></div>
         <h2>You're booked in!</h2>
         <p class="done-when" id="done-when"></p>
         <p class="muted">A confirmation with a calendar invite is on its way to <b id="done-email"></b>. Need to change it? Just reply to that email.</p>

@@ -10,6 +10,8 @@
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
+// Line icons from the page's sprite (index.html).
+const ic = (n) => `<svg class="i" aria-hidden="true"><use href="#i-${n}"></use></svg>`;
 const sleep = (ms) => new Promise((r) => setTimeout(r, reduced ? Math.min(ms, 120) : ms));
 
 // ---- Hero orb ----
@@ -167,17 +169,17 @@ async function play(key) {
     }
     if (step.q) {
       const li = demoEl.querySelector(`#d-qual [data-k="${step.q[0]}"]`);
-      if (li) { li.classList.add('done'); li.querySelector('.tick').textContent = '✓'; li.querySelector('.a').textContent = step.q[1]; }
+      if (li) { li.classList.add('done'); li.querySelector('.tick').innerHTML = ic('check'); li.querySelector('.a').textContent = step.q[1]; }
     }
     if (step.e === 'interested') {
       await sleep(300);
       demoEl.querySelector('[data-anchor=interested]').classList.add('done');
-      add('<div class="evt">✓ Anchor 1 · Positive reply</div>');
+      add(`<div class="evt">${ic('check')}Anchor 1 · Positive reply</div>`);
     }
     if (step.e === 'booked') {
       await sleep(300);
       demoEl.querySelector('[data-anchor=booked]').classList.add('done');
-      add('<div class="evt">📅 Anchor 2 · Callback booked</div>');
+      add(`<div class="evt">${ic('cal')}Anchor 2 · Callback booked</div>`);
       demoOrb?.set('booked');
       stateEl.querySelector('span').textContent = 'Callback booked';
     }
