@@ -13,6 +13,8 @@
 //   POST /twilio/dial-done  Twilio: the AI call ended (its length is billed)
 //   POST /stripe/webhook    Stripe: a credit pack was paid, or a card saved
 //   POST /billing/charge    weekly booking charges, called by pg_cron
+//   POST /public/demo-slots open demo times (website, no login)
+//   POST /public/demo-book  book a demo (website, no login)
 //
 // "Enforce JWT verification" must be OFF for this function: Twilio, OpenAI and
 // pg_cron cannot send a Supabase JWT. Each route authenticates itself instead:
@@ -34,7 +36,8 @@
 //   APP_URL                 the app's address, for invite emails
 //   STRIPE_SECRET_KEY       billing: the same Stripe account as ql-hq
 //   STRIPE_WEBHOOK_SECRET   billing: whsec_... of this function's endpoint
-//   RESEND_API_KEY          optional, emails "callback booked" alerts
+//   CF_TURNSTILE_SECRET     optional, the demo form then requires Turnstile
+//   RESEND_API_KEY          emails: callback alerts and demo bookings
 //   NOTIFY_FROM_EMAIL       optional, the From address for those emails
 // =============================================================================
 
@@ -100,6 +103,8 @@ Deno.serve(async (req) => {
       case "/twilio/dial-done": return await handleTwilioDialDone(req);
       case "/stripe/webhook": return await handleStripeWebhook(req);
       case "/billing/charge": return await handleBillingCharge(req);
+      case "/public/demo-slots": return await handleDemoSlots(req);
+      case "/public/demo-book": return await handleDemoBook(req);
       default: return json({ error: "Not found" }, 404);
     }
   } catch (e) {
@@ -517,7 +522,8 @@ function voiceInstructions(ctx: Ctx): string {
   const { agent, lead } = ctx;
   return `You are ${agent.bot_name}, an AI assistant answering the phone for ${agent.company_name}. ${leadName(lead)} is calling back the number that texted them about their enquiry. Your job is to confirm their interest, ask the qualifying questions and book a callback with a team member.
 
-When the call connects, speak first: greet them by first name, say you're ${agent.bot_name} from ${agent.company_name}, and thank them for calling back. Then ask whether they're still looking into ${lead.service || agent.service}.
+When the call connects, speak first: greet them by first name, say you're ${agent.bot_name}, an AI assistant for ${agent.company_name}, thank them for calling back, and mention briefly that the call is transcribed so the team has the details (e.g. "Just so you know, I'm an AI assistant and this call is transcribed for the team."). Then ask whether they're still looking into ${lead.service || agent.service}.
+If they'd rather not talk to an AI, offer to have a person from the team call them back and book that callback instead.
 
 ## Style
 ${agent.tone}
@@ -1202,6 +1208,165 @@ async function handleBillingCharge(req: Request): Promise<Response> {
   const results = [];
   for (const c of clients || []) results.push(await chargeBookings(c));
   return json({ results });
+}
+
+// =============================================================================
+// Website: demo bookings (no login)
+// =============================================================================
+// demo.html lists open times and books one. Public by design, so: a hidden
+// honeypot field, at most 3 bookings per visitor per day, Cloudflare
+// Turnstile when CF_TURNSTILE_SECRET is set, and every booking must be one of
+// the times this function itself offered.
+
+async function demoAvailability(): Promise<{ settings: Row; slots: string[] }> {
+  const { data: settings } = await db.from("demo_settings").select("*").eq("id", 1).maybeSingle();
+  const st: Row = settings || { timezone: "Australia/Brisbane", days: [1, 2, 3, 4, 5], start_time: "09:00", end_time: "17:00", slot_minutes: 30, min_notice_hours: 12, horizon_days: 21 };
+  const nowIso = new Date().toISOString();
+  const [{ data: booked }, { data: blackouts }] = await Promise.all([
+    db.from("demo_requests").select("slot_start").eq("status", "booked").gte("slot_start", nowIso),
+    db.from("demo_blackouts").select("starts_at, ends_at").gt("ends_at", nowIso),
+  ]);
+  const taken = new Set((booked || []).map((b) => new Date(b.slot_start).toISOString()));
+  const blocks = (blackouts || []).map((b) => [new Date(b.starts_at).getTime(), new Date(b.ends_at).getTime()]);
+  const tz = st.timezone, len = st.slot_minutes * 60000;
+  const earliest = Date.now() + st.min_notice_hours * 3600e3;
+  const [sh, sm] = String(st.start_time).split(":").map(Number), [eh, em] = String(st.end_time).split(":").map(Number);
+  const slots: string[] = [], seenDays = new Set<string>();
+  for (let d = 0; d <= st.horizon_days; d++) {
+    const z = zoned(new Date(Date.now() + d * 86400e3), tz);
+    if (seenDays.has(z.ymd) || !arr<number>(st.days).includes(z.dow)) continue;
+    seenDays.add(z.ymd);
+    for (let m = sh * 60 + sm; m + st.slot_minutes <= eh * 60 + em; m += st.slot_minutes) {
+      const at = localToUtc(`${z.ymd}T${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`, tz);
+      if (!at || at.getTime() < earliest) continue;
+      const iso = at.toISOString(), t = at.getTime();
+      if (taken.has(iso) || blocks.some(([a, b]) => t < b && t + len > a)) continue;
+      slots.push(iso);
+    }
+  }
+  return { settings: st, slots };
+}
+
+async function handleDemoSlots(req: Request): Promise<Response> {
+  if (req.method !== "POST") throw new HttpError(405, "POST only");
+  const { settings, slots } = await demoAvailability();
+  return json({ timezone: settings.timezone, slot_minutes: settings.slot_minutes, slots });
+}
+
+const validTz = (tz: unknown) => {
+  try { if (typeof tz === "string" && tz) { new Intl.DateTimeFormat("en-AU", { timeZone: tz }); return tz; } } catch { /* invalid */ }
+  return null;
+};
+const fmtIn = (d: Date, tz: string) => new Intl.DateTimeFormat("en-AU", {
+  timeZone: tz, weekday: "long", day: "numeric", month: "long", hour: "numeric", minute: "2-digit", timeZoneName: "short",
+}).format(d);
+
+function icsInvite(r: Row, summary: string, description: string): string {
+  const f = (d: Date) => d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+  const t = (s: string) => s.replace(/\\/g, "\\\\").replace(/[,;]/g, (c) => `\\${c}`).replace(/\r?\n/g, "\\n");
+  return [
+    "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//QuoteLeads//Reactivate//EN", "METHOD:PUBLISH", "BEGIN:VEVENT",
+    `UID:${r.id}@reactivate.quoteleads.com.au`, `DTSTAMP:${f(new Date())}`,
+    `DTSTART:${f(new Date(r.slot_start))}`, `DTEND:${f(new Date(r.slot_end))}`,
+    `SUMMARY:${t(summary)}`, `DESCRIPTION:${t(description)}`, "END:VEVENT", "END:VCALENDAR", "",
+  ].join("\r\n");
+}
+
+async function sendEmail(msg: Row) {
+  const key = env("RESEND_API_KEY"), from = env("NOTIFY_FROM_EMAIL");
+  if (!key || !from) { console.error("Email not sent: RESEND_API_KEY / NOTIFY_FROM_EMAIL not set"); return; }
+  const r = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, "Content-Type": "application/json" },
+    body: JSON.stringify(cleanDeep({ from, ...msg })),
+  });
+  if (!r.ok) console.error("Resend:", r.status, await r.text());
+}
+
+async function demoEmails(r: Row, settings: Row) {
+  const ourTz = settings.timezone, theirTz = r.visitor_tz || ourTz;
+  const start = new Date(r.slot_start);
+  const whenOurs = fmtIn(start, ourTz), whenTheirs = fmtIn(start, theirTz);
+  const rows: [string, unknown][] = [
+    ["Name", r.name], ["Business", r.business], ["Email", r.email], ["Mobile", r.phone],
+    ["Industry", r.industry], ["Old leads (approx.)", r.lead_count], ["Notes", r.message],
+  ];
+  const table = rows.filter(([, v]) => v).map(([k, v]) =>
+    `<tr><td style="padding:6px 12px 6px 0;color:#667"><b>${escapeXml(k)}</b></td><td style="padding:6px 0">${escapeXml(String(v))}</td></tr>`).join("");
+  const ics = (summary: string) => [{ filename: "reactivate-demo.ics", content: btoa(unescape(encodeURIComponent(icsInvite(r, summary,
+    `Reactivate demo with ${r.name}${r.business ? ` (${r.business})` : ""}. ${r.phone ? `Mobile: ${r.phone}. ` : ""}Email: ${r.email}.`)))) }];
+
+  await sendEmail({
+    to: [settings.notify_email || "contact@quoteleads.com.au"], reply_to: r.email,
+    subject: `New Reactivate demo: ${r.business || r.name} · ${whenOurs}`,
+    html: `<p><b>${escapeXml(r.name)}</b> booked a Reactivate demo for <b>${escapeXml(whenOurs)}</b>${theirTz !== ourTz ? ` (${escapeXml(whenTheirs)} their time)` : ""}.</p>
+<table style="border-collapse:collapse;font:14px/1.5 sans-serif">${table}</table>
+<p style="color:#667;font-size:13px">Reply to this email to reach them directly. The calendar invite is attached. Manage demos in the app under Demos.</p>`,
+    attachments: ics(`Reactivate demo: ${r.business || r.name}`),
+  });
+  await sendEmail({
+    to: [r.email], reply_to: settings.notify_email || "contact@quoteleads.com.au",
+    subject: `Your Reactivate demo is booked for ${whenTheirs}`,
+    html: `<p>Hi ${escapeXml(String(r.name).split(" ")[0])},</p>
+<p>Thanks for booking a demo of Reactivate by QuoteLeads. You're booked in for:</p>
+<p style="font-size:18px"><b>${escapeXml(whenTheirs)}</b></p>
+<p>We'll contact you at that time${r.phone ? ` on ${escapeXml(r.phone)}` : ""}. A calendar invite is attached.</p>
+<p>Need to change the time, or have a question first? Just reply to this email.</p>
+<p>Talk soon,<br>The QuoteLeads team</p>
+<p style="color:#889;font-size:12px">You're receiving this because you booked a demo at reactivate.quoteleads.com.au. QuoteLeads, ABN 83 894 208 171.</p>`,
+    attachments: ics("Reactivate demo with QuoteLeads"),
+  });
+}
+
+async function handleDemoBook(req: Request): Promise<Response> {
+  if (req.method !== "POST") throw new HttpError(405, "POST only");
+  const b = await req.json().catch(() => ({}));
+  // Bots fill every field; people never see this one. Pretend it worked.
+  if (b.website) return json({ ok: true });
+
+  const name = clean(b.name, 100), email = String(b.email || "").trim().toLowerCase().slice(0, 200);
+  if (!name || name.length < 2) throw new HttpError(400, "Please enter your name");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email)) throw new HttpError(400, "Please enter a valid email");
+  if (b.consent !== true) throw new HttpError(400, "Please agree to be contacted about your demo");
+
+  const secret = env("CF_TURNSTILE_SECRET");
+  const ip = (req.headers.get("cf-connecting-ip") || req.headers.get("x-forwarded-for") || "").split(",")[0].trim();
+  if (secret) {
+    const v = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+      method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ secret, response: String(b.cf_token || ""), ...(ip ? { remoteip: ip } : {}) }),
+    }).then((r) => r.json()).catch(() => ({}));
+    if (!v.success) throw new HttpError(403, "The anti-spam check failed. Please refresh the page and try again.");
+  }
+
+  const ipHash = ip ? hex(await hmac("SHA-256", env("SUPABASE_URL"), ip)) : null;
+  if (ipHash) {
+    const { count } = await db.from("demo_requests").select("id", { count: "exact", head: true })
+      .eq("ip_hash", ipHash).gte("created_at", new Date(Date.now() - 86400e3).toISOString());
+    if ((count || 0) >= 3) throw new HttpError(429, "Too many bookings from here today. Email contact@quoteleads.com.au and we'll sort it out.");
+  }
+  const { data: existing } = await db.from("demo_requests").select("slot_start").eq("email", email).eq("status", "booked")
+    .gte("slot_start", new Date().toISOString()).limit(1).maybeSingle();
+  if (existing) throw new HttpError(409, "You already have a demo booked. Check your email, or reply to it to change the time.");
+
+  const { settings, slots } = await demoAvailability();
+  const start = new Date(String(b.slot_start || ""));
+  if (isNaN(start.getTime()) || !slots.includes(start.toISOString())) {
+    throw new HttpError(409, "That time isn't available any more. Please pick another.");
+  }
+  const row = {
+    name, email, phone: clean(b.phone, 30), business: clean(b.business, 120), industry: clean(b.industry, 60),
+    lead_count: clean(b.lead_count, 40), message: clean(b.message, 1000), visitor_tz: validTz(b.tz),
+    slot_start: start.toISOString(), slot_end: new Date(start.getTime() + settings.slot_minutes * 60000).toISOString(),
+    ip_hash: ipHash,
+  };
+  const { data: saved, error } = await db.from("demo_requests").insert(row).select("*").single();
+  if (error) {
+    if (error.code === "23505") throw new HttpError(409, "Someone just booked that time. Please pick another.");
+    throw error;
+  }
+  background(demoEmails(saved, settings));
+  return json({ ok: true, slot_start: saved.slot_start, slot_end: saved.slot_end });
 }
 
 // =============================================================================

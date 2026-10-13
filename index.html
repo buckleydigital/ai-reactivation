@@ -1,121 +1,297 @@
 <!doctype html>
-<html lang="en">
+<html lang="en-AU">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#050b14">
-<meta name="robots" content="noindex">
-<!-- Only these sources may run code or receive data. Inline styles are allowed
-     (the app sets them); inline scripts and eval are not. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; media-src data: blob:; connect-src 'self' https://vcantdssoketpxaybtwh.supabase.co wss://vcantdssoketpxaybtwh.supabase.co; object-src 'none'; base-uri 'self'; form-action 'self'">
-<title>Reactivate · AI Sales Agent</title>
+<!-- The homepage talks to nothing: no API, no tracking. connect-src 'none'
+     keeps it that way, including the scripted demo. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'self'; form-action 'none'">
+<script src="assets/forward.js"></script>
+<title>Reactivate by QuoteLeads · Turn old leads into sales, on performance</title>
+<meta name="description" content="Got old leads? We use AI and SMS to turn them into booked calls and sales. Performance-based: nothing upfront, you only pay at the results we agree.">
+<meta name="theme-color" content="#04070d">
+<meta property="og:title" content="Reactivate by QuoteLeads: turn old leads into sales">
+<meta property="og:description" content="AI + SMS lead reactivation on a performance basis. Nothing upfront. You only pay at the results we agree.">
+<meta property="og:type" content="website">
+<link rel="icon" href="favicon.ico" sizes="any">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="assets/app.css">
+<link href="https://fonts.googleapis.com/css2?family=Exo+2:wght@600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="assets/home.css">
 </head>
 <body>
 
-<div id="boot" class="boot"><div class="boot-orb"></div></div>
-
-<!-- Sign in -->
-<section id="login" class="auth" hidden>
-  <form class="auth-card" id="login-form">
-    <div class="brand-lg"><span class="brand-mark"></span>Reactivate</div>
-    <p class="muted">AI database reactivation. Sign in to your account.</p>
-    <label>Email<input type="email" id="login-email" autocomplete="email" required></label>
-    <label>Password<input type="password" id="login-password" autocomplete="current-password" required></label>
-    <button class="btn primary block" type="submit">Sign in</button>
-    <button class="link" type="button" data-act="forgot">Forgot your password?</button>
-    <p class="form-msg" id="login-msg"></p>
-  </form>
-</section>
-
-<!-- Set a password (invite or reset link) -->
-<section id="setpw" class="auth" hidden>
-  <form class="auth-card" id="setpw-form">
-    <div class="brand-lg"><span class="brand-mark"></span>Reactivate</div>
-    <p class="muted">Choose a password for your account.</p>
-    <label>New password<input type="password" id="setpw-password" minlength="8" autocomplete="new-password" required></label>
-    <button class="btn primary block" type="submit">Save password</button>
-    <p class="form-msg" id="setpw-msg"></p>
-  </form>
-</section>
-
-<div id="app" hidden>
-  <header class="top">
-    <div class="brand"><span class="brand-mark"></span><span class="brand-name">Reactivate</span></div>
-    <nav class="views" id="views">
-      <button data-view="inbox" class="on">Inbox</button>
-      <button data-view="campaigns">Campaigns</button>
-      <button data-view="clients" class="admin-only">Clients</button>
-      <button data-view="users" class="admin-only">Users</button>
-      <button data-view="dnc" class="admin-only">Do not contact</button>
-      <button data-view="billing">Billing</button>
+<header class="nav">
+  <div class="wrap">
+    <a class="lockup" href="./" aria-label="Reactivate by QuoteLeads, home">
+      <span class="lockup-word">Reactivate</span>
+      <span class="lockup-by">by <img src="assets/quoteleads-logo-white.png" alt="QuoteLeads" width="78" height="16"></span>
+    </a>
+    <nav class="nav-links" aria-label="Sections">
+      <a href="#deal">The deal</a>
+      <a href="#how">How it works</a>
+      <a href="#demo-section">Demo</a>
+      <a href="#compliance">Compliance</a>
+      <a href="#faq">FAQ</a>
     </nav>
-    <div class="top-right">
-      <select id="client-filter" class="admin-only" aria-label="Client"></select>
-      <span id="client-name" class="client-only client-chip"></span>
-      <button class="btn ghost admin-only" id="demo-toggle" data-act="toggle-demo" title="Show demo conversations">Demo mode</button>
-      <button class="btn small admin-only" data-act="demo-new">New demo</button>
-      <div class="menu">
-        <button class="avatar" id="avatar" data-act="menu" aria-label="Account"></button>
-        <div class="menu-pop" id="menu-pop" hidden>
-          <div class="menu-head" id="menu-head"></div>
-          <button data-act="signout">Sign out</button>
+    <div class="nav-cta">
+      <a class="btn small" href="app.html">Log in</a>
+      <a class="btn small primary ghost-mobile" href="demo.html">Book a free demo</a>
+    </div>
+  </div>
+</header>
+
+<main>
+  <!-- Hero -->
+  <section class="hero">
+    <div class="wrap">
+      <div>
+        <span class="eyebrow"><i></i>Performance-based lead reactivation</span>
+        <h1>Got old leads?<br><span class="grad">We'll turn them into sales.</span></h1>
+        <p class="lede">Your old enquiries are sitting in a spreadsheet doing nothing. We use <b>AI and SMS</b> to bring them back, qualify them and book them in with your team. And we do it on <b>performance</b>: nothing upfront, and you only pay at the results we agree. <b>If we don't deliver, you don't pay.</b></p>
+        <div class="hero-cta">
+          <a class="btn primary" href="demo.html">Book a free demo →</a>
+          <a class="btn" href="#demo-section">▶ Watch it work</a>
+        </div>
+        <div class="trust"><span>Nothing upfront</span><span>Pay only for agreed results</span><span>Compliance built in</span></div>
+      </div>
+      <div class="hero-visual" aria-hidden="true">
+        <canvas id="hero-orb"></canvas>
+        <div class="float ai f1">Hi Michelle, it's Sarah from Acme Solar. Still looking into solar panels?</div>
+        <div class="float lead f2">Yes! We put it off over winter</div>
+        <div class="float tag f3">✓ Positive reply</div>
+        <div class="float tag f4">📅 Callback booked · Thu 2:30pm</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- The deal -->
+  <section id="deal">
+    <div class="wrap">
+      <div class="center">
+        <div class="kicker">The deal</div>
+        <h2>We only win when you win</h2>
+        <p class="section-lede">No retainers. No setup fees. No paying for "activity". We agree the results that matter to you, and that's the only time we get paid.</p>
+      </div>
+      <div class="grid3">
+        <div class="card deal"><div class="deal-n">$0</div><h3>Nothing upfront</h3><p>We set everything up and run your campaign before you spend a cent. You see the results first.</p></div>
+        <div class="card deal"><div class="deal-n">⚓</div><h3>Paid at agreed anchor points</h3><p>Before we start, we agree exactly what you pay on, like a lead booking a call with your team. Those are our anchor points.</p></div>
+        <div class="card deal"><div class="deal-n">0%</div><h3>Zero upfront risk</h3><p>If the campaign doesn't hit an anchor point, you don't pay. Every result is tracked live in your dashboard, and you can dispute any booking within 48 hours.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- The hard sell -->
+  <section class="versus-sec">
+    <div class="wrap">
+      <div class="versus">
+        <div class="versus-q">
+          <div class="kicker">Simple maths</div>
+          <h2>Do you want <span class="strike">100% of nothing</span>,<br>or a share of an <span class="grad">extra $100,000?</span></h2>
+          <p class="section-lede">Leads sitting in your CRM earn you exactly $0, and they get colder every month. You've already paid to win them. Let us turn them back into revenue, and pay us only when it works.</p>
+          <a class="btn primary" href="demo.html">See what your list is worth →</a>
+        </div>
+        <div class="versus-cards">
+          <div class="vs-card dead"><small>Leave them</small><b>$0</b><span>100% of nothing, forever</span></div>
+          <div class="vs-arrow">→</div>
+          <div class="vs-card live"><small>Reactivate them</small><b>+$100k?</b><span>New sales you'd never have had, and we're only paid on the results</span></div>
+        </div>
+      </div>
+      <p class="fineprint center">The $100,000 is an example, not a promise. What a list returns depends on your industry, your offer and how old the leads are.</p>
+    </div>
+  </section>
+
+  <!-- How -->
+  <section id="how">
+    <div class="wrap">
+      <div class="kicker">How it works</div>
+      <h2>From dead list to booked calls</h2>
+      <p class="section-lede">Done for you, start to finish. You just take the calls.</p>
+      <div class="grid4">
+        <div class="card"><div class="step-n">01</div><h3>Send us your old leads</h3><p>People who enquired but never went ahead. We confirm every one agreed to hear from you before anything is sent.</p></div>
+        <div class="card"><div class="step-n">02</div><h3>The agent says hello</h3><p>A short, personal text from your business asking if they're still interested, with an easy way to opt out.</p></div>
+        <div class="card"><div class="step-n">03</div><h3>It qualifies the yeses</h3><p>When someone replies positively, it asks your questions one at a time, the way a good sales rep would.</p></div>
+        <div class="card"><div class="step-n">04</div><h3>Booked in with your team</h3><p>It agrees a time inside your hours and sends you everything you need for the call. That's an anchor point.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Demo: scripted, plays in the browser, calls nothing -->
+  <section id="demo-section">
+    <div class="wrap">
+      <div class="center">
+        <div class="kicker">See it in action</div>
+        <h2>Watch a dead lead come back to life</h2>
+        <p class="section-lede">A real-style conversation, start to finish, with both anchor points. Pick an industry.</p>
+      </div>
+      <div class="demo-shell" id="demo">
+        <div class="demo-bar">
+          <div class="dots"><i></i><i></i><i></i></div>
+          <div class="tabs" role="tablist">
+            <button class="tab on" data-k="solar">Solar</button>
+            <button class="tab" data-k="roofing">Roofing</button>
+            <button class="tab" data-k="dental">Dental</button>
+            <button class="tab" data-k="mortgages">Mortgages</button>
+            <button class="tab" data-k="car-finance">Car finance</button>
+          </div>
+          <button class="btn small demo-replay" data-replay>↻ Replay</button>
+        </div>
+        <div class="demo-grid">
+          <aside class="demo-agent">
+            <div class="demo-orb"><canvas id="demo-orb"></canvas></div>
+            <div class="agent-name" id="d-name">Sarah</div>
+            <div class="agent-role">Sales Representative</div>
+            <div class="agent-state" id="d-state"><i></i><span>Standing by</span></div>
+            <div class="demo-lead" id="d-lead"></div>
+          </aside>
+          <div class="demo-chat">
+            <div class="demo-head" id="d-head"></div>
+            <div class="thread" id="d-thread" aria-live="polite"></div>
+          </div>
+          <aside class="demo-ins">
+            <div>
+              <div class="ins-h">Anchor points</div>
+              <div class="anchors">
+                <div class="anchor" data-anchor="interested"><small>01</small><b>Positive reply</b></div>
+                <div class="anchor" data-anchor="booked"><small>02</small><b>Callback booked</b></div>
+              </div>
+            </div>
+            <div>
+              <div class="ins-h">Qualification</div>
+              <ul class="qual" id="d-qual"></ul>
+            </div>
+          </aside>
+        </div>
+      </div>
+      <p class="demo-note">Example conversation with a fictional business, sped up. Real replies wait 30 to 60 seconds, like a person would.</p>
+      <div class="center" style="margin-top:18px"><a class="btn primary" href="demo.html">Get a live demo for your industry →</a></div>
+    </div>
+  </section>
+
+  <!-- Compliance -->
+  <section id="compliance">
+    <div class="wrap">
+      <div class="comp">
+        <div>
+          <div class="kicker">Compliance</div>
+          <h2>Compliance isn't an add-on.<br><span class="grad">It's built into every message.</span></h2>
+          <p class="section-lede">Australia's Spam Act says marketing texts need consent, must identify the sender and must let people opt out. Every one of those is built into how Reactivate works, so it isn't left to chance. Not one message goes out without them.</p>
+        </div>
+        <ul class="comp-list">
+          <li><b>Consent confirmed</b> for every list before a single text is sent</li>
+          <li><b>Your business named</b> in every first message</li>
+          <li><b>Opt-out included</b> in every first message</li>
+          <li><b>STOP honoured instantly</b>, and never texted again</li>
+          <li><b>One do-not-contact list</b> across every campaign</li>
+          <li><b>Honest AI:</b> it says it's an AI assistant if asked, and on every call</li>
+          <li><b>Calls disclosed</b> as transcribed, up front</li>
+          <li><b>Sending hours</b> that respect your customers</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- Features -->
+  <section id="features">
+    <div class="wrap">
+      <div class="kicker">What you get</div>
+      <h2>A top sales rep that never stops following up</h2>
+      <p class="section-lede">Everything happens in your own dashboard, live.</p>
+      <div class="grid3">
+        <div class="card"><div class="icon">⚓</div><h3>Anchor points, tracked live</h3><p>See the moment a lead replies positively and the moment a call is booked. It's exactly what you pay on, so there's never a debate.</p></div>
+        <div class="card"><div class="icon">📞</div><h3>Answers when they call back</h3><p>If a lead rings the number instead of texting, a voice agent answers, qualifies them and books the call.</p></div>
+        <div class="card"><div class="icon">⏱️</div><h3>Feels human</h3><p>Replies wait 30 to 60 seconds, ask one question at a time and never sound like a script.</p></div>
+        <div class="card"><div class="icon">🙋</div><h3>Step in any time</h3><p>Watch every conversation live. Type a reply yourself and the agent steps back for that lead.</p></div>
+        <div class="card"><div class="icon">🎯</div><h3>Your questions, your rules</h3><p>Set the qualifying questions, the tone, what rules a lead out and what the agent must never say.</p></div>
+        <div class="card"><div class="icon">🔔</div><h3>Instant booking alerts</h3><p>Every booked call lands on your phone and in your inbox, with the lead's answers and a summary.</p></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Niches -->
+  <section>
+    <div class="wrap center">
+      <div class="kicker">Industries</div>
+      <h2>Built for businesses with enquiries</h2>
+      <p class="section-lede">Each industry starts with its own script, questions and compliance guardrails, tailored to you.</p>
+      <div class="chips">
+        <span class="chip">☀️ Solar</span><span class="chip">🏠 Roofing</span><span class="chip">🏦 Mortgages</span><span class="chip">🛡️ Insurance</span>
+        <span class="chip">🚗 Car finance</span><span class="chip">⚖️ Claims</span><span class="chip">🦷 Dental</span><span class="chip">✨ Cosmetic clinics</span>
+        <span class="chip">🔨 Home improvements</span><span class="chip">🛒 Ecommerce</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Pricing -->
+  <section id="pricing">
+    <div class="wrap">
+      <div class="center">
+        <div class="kicker">Pricing</div>
+        <h2>Pay for results, not promises</h2>
+        <p class="section-lede">Every list is different, so we price per industry. Book a demo and we'll give you a straight quote.</p>
+      </div>
+      <div class="grid2">
+        <div class="card price feature">
+          <div class="kicker">Recommended</div>
+          <h3>Performance</h3>
+          <p class="muted">Nothing upfront. You pay only at the anchor points we agree.</p>
+          <ul><li>No setup fee, no retainer</li><li>Paid per agreed result, like a booked call</li><li>48 hours to dispute any result</li><li>Optional monthly cap, so there are no surprises</li></ul>
+          <a class="btn primary" href="demo.html">Get my quote</a>
+        </div>
+        <div class="card price">
+          <div class="kicker">Pay as you go</div>
+          <h3>Prepaid credits</h3>
+          <p class="muted">Prefer to pay for usage instead? Buy credits and use them as you go.</p>
+          <ul><li>1 credit per SMS sent or received</li><li>No card kept on file</li><li>Top up whenever you like</li><li>No lock-in contract</li></ul>
+          <a class="btn" href="demo.html">Ask about credits</a>
         </div>
       </div>
     </div>
-  </header>
-  <div id="demo-ribbon" class="ribbon" hidden>Demo mode: nothing here is sent by SMS. Type as the lead to see how the agent responds.</div>
+  </section>
 
-  <main>
-    <section id="view-inbox" class="inbox" data-tab="list">
-      <aside class="col col-agent">
-        <div class="agent-card">
-          <div class="orb-wrap"><canvas id="orb"></canvas></div>
-          <div class="agent-meta">
-            <div class="agent-name" id="agent-name">AI Agent</div>
-            <div class="agent-role">Sales Representative</div>
-            <div class="agent-state" id="agent-state" data-state="idle"><i></i><span>Standing by</span></div>
-          </div>
-          <div class="agent-stats" id="agent-stats"></div>
-        </div>
-        <div class="list-tools">
-          <input type="search" id="lead-search" placeholder="Search name or phone">
-          <select id="campaign-filter" aria-label="Campaign"></select>
-          <div class="chips" id="status-chips"></div>
-        </div>
-        <div class="lead-list" id="lead-list"></div>
-      </aside>
-      <section class="col col-chat" id="chat"></section>
-      <aside class="col col-insights" id="insights"></aside>
-    </section>
+  <!-- FAQ -->
+  <section id="faq">
+    <div class="wrap">
+      <div class="center"><div class="kicker">FAQ</div><h2>Questions, answered</h2></div>
+      <div class="faq">
+        <details open><summary>Is there really nothing upfront?</summary><p>Yes, on our performance plan there's no setup fee and no retainer. We add a card when you start, but it's only charged for the anchor points you've reached, weekly, after a 48 hour window to dispute any of them.</p></details>
+        <details><summary>What's an "anchor point"?</summary><p>A result we both agree is worth paying for, written down before we start. Most businesses pay when a lead books a call with their team. You can see every anchor point as it happens in your dashboard.</p></details>
+        <details><summary>What if the campaign doesn't work?</summary><p>Then it doesn't hit any anchor points, and you don't pay. That's the point of performance pricing: we only make money when we bring you results.</p></details>
+        <details><summary>Is it legal to text old leads?</summary><p>In Australia, marketing texts need the person's consent, must identify your business and must let people opt out (the Spam Act 2003). We only text people who enquired with you and agreed to be contacted, and you confirm that for every list. Every first message names your business and how to opt out, and opt-outs are honoured straight away. You're still responsible for your list, so leave out anyone you're unsure about.</p></details>
+        <details><summary>Does the AI pretend to be a person?</summary><p>No. If a lead asks, it says it's an AI assistant for your business and that a real person from your team will call. On phone calls it says so at the start.</p></details>
+        <details><summary>What happens when someone replies STOP?</summary><p>They get one confirmation and are never texted from our number again. You can also add numbers to the do-not-contact list, or upload your existing one.</p></details>
+        <details><summary>How old can the leads be?</summary><p>Leads from the last couple of years usually work best, but it depends on your industry. We'll look at your list in the demo and tell you honestly if it's worth running.</p></details>
+        <details><summary>How is my data handled?</summary><p>Your lead list is only used to run your campaigns, and only you (and our team) can see your leads. See our <a href="privacy.html">Privacy Policy</a> for the detail, including the providers we use.</p></details>
+      </div>
+    </div>
+  </section>
 
-    <section id="view-campaigns" class="page" hidden></section>
-    <section id="view-clients" class="page" hidden></section>
-    <section id="view-users" class="page" hidden></section>
-    <section id="view-dnc" class="page" hidden></section>
-    <section id="view-billing" class="page" hidden></section>
-  </main>
+  <section>
+    <div class="wrap">
+      <div class="cta-band">
+        <div class="kicker">Zero upfront risk</div>
+        <h2>Your old leads are worth more than $0.</h2>
+        <p class="section-lede">Book a free 30 minute demo. We'll show you the agent working in your industry and tell you straight what your list could be worth.</p>
+        <div class="hero-cta"><a class="btn primary" href="demo.html">Book a free demo →</a><a class="btn" href="app.html">Client login</a></div>
+      </div>
+    </div>
+  </section>
+</main>
 
-  <nav class="mobile-tabs" id="mobile-tabs">
-    <button data-tab="list" class="on"><span class="mt-dot"></span>Agent &amp; leads</button>
-    <button data-tab="chat">Conversation</button>
-    <button data-tab="insights">Insights</button>
-  </nav>
-</div>
+<footer>
+  <div class="wrap foot">
+    <div>
+      <a class="lockup" href="./"><span class="lockup-word">Reactivate</span><span class="lockup-by">by <img src="assets/quoteleads-logo-white.png" alt="QuoteLeads" width="78" height="16"></span></a>
+      <small>© <span id="year">2026</span> QuoteLeads · ABN 83 894 208 171<br>Example conversations on this page use fictional businesses.</small>
+    </div>
+    <div class="contact">Get in touch<br><a href="mailto:contact@quoteleads.com.au">contact@quoteleads.com.au</a></div>
+    <nav class="foot-links" aria-label="Footer">
+      <a href="demo.html">Book a demo</a><a href="app.html">Client login</a><a href="terms.html">Terms of Service</a><a href="privacy.html">Privacy Policy</a>
+    </nav>
+  </div>
+</footer>
 
-<div id="modal-root"></div>
-<div id="toasts" aria-live="polite"></div>
-
-<!-- Pinned to exact files: the browser refuses either one if the CDN ever
-     serves different bytes. To upgrade, change the version and the hash
-     together (sha384 of the file as published on npm). -->
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js" integrity="sha384-0w2KAL2YHP6wKOkUDzkCDGgVvfmHnj02DHeQ6XcHOgTfFsGyonKOpShMH1x6nk9o" crossorigin="anonymous"></script>
-<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js" integrity="sha384-D/t0ZMqQW31H3az8ktEiNb39wyKnS82iFY52QPACM+IjKW3jDUhyIgh2PApRqJZs" crossorigin="anonymous"></script>
-<script src="assets/config.js"></script>
 <script src="assets/orb.js"></script>
-<script src="assets/app.js"></script>
+<script src="assets/home.js"></script>
 </body>
 </html>
