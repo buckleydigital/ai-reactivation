@@ -7,4 +7,7 @@ window.RX_CONFIG = {
   // Rough cost to you, in cents, for the admin margin view only. Clients never
   // see these. Adjust to your Twilio and OpenAI bills.
   costs: { smsSegmentCents: 6, callMinuteCents: 30 },
+  // GST added on top of prices. Display only: the edge function's GST_RATE
+  // secret decides what is actually charged, so keep the two the same.
+  gstRate: 0.1,
 };

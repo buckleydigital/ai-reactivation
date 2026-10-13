@@ -1262,6 +1262,9 @@ const MODE_LABEL = { per_booking: 'Pay per booking', credits: 'Prepaid credits',
 const CHARGE_TONE = { pending: 'info', disputed: 'warm', waived: 'mute', charging: 'info', charged: 'good', failed: 'bad' };
 const CREDIT_PACKS = [1000, 5000, 10000, 25000];
 const DISPUTE_HOURS = 48;
+// Prices are stored excluding GST; GST is added when charging.
+const GST = CFG.gstRate ?? 0.1;
+const plusGst = GST > 0 ? ' + GST' : '';
 
 function monthKey() {
   const p = Object.fromEntries(new Intl.DateTimeFormat('en-CA', { timeZone: 'Australia/Sydney', year: 'numeric', month: '2-digit' }).formatToParts(new Date()).map((x) => [x.type, x.value]));
@@ -1291,7 +1294,7 @@ async function renderBilling() {
   const monthStart = new Date(monthKey() + 'T00:00:00+10:00');
   const monthCharges = ch.filter((c) => new Date(c.booked_at) >= monthStart && c.status !== 'waived');
   const revenue = client.billing_mode === 'per_booking' ? monthCharges.reduce((a, c) => a + c.amount_cents, 0)
-    : client.billing_mode === 'credits' ? (ledger.data || []).filter((l) => l.reason === 'purchase' && new Date(l.created_at) >= monthStart).reduce((a, l) => a + (l.amount_cents || 0), 0) : 0;
+    : client.billing_mode === 'credits' ? Math.round((ledger.data || []).filter((l) => l.reason === 'purchase' && new Date(l.created_at) >= monthStart).reduce((a, l) => a + (l.amount_cents || 0), 0) / (1 + GST)) : 0;
 
   let main = '';
   if (client.billing_mode === 'credits') {
@@ -1299,23 +1302,23 @@ async function renderBilling() {
     main = `<div class="card"><h4>Credit balance</h4>
       <div style="font-size:34px;font-weight:700;color:${low ? 'var(--bad)' : 'var(--good)'}">${(client.credit_balance || 0).toLocaleString('en-AU')}</div>
       <div class="small muted">1 credit per SMS segment sent or received · ${client.credits_per_call_minute} credits per call minute${low ? '<br><b style="color:var(--bad)">New handraisers are paused until you top up.</b> Conversations already going carry on for a little while.' : ''}</div>
-      ${client.price_per_1000_credits_cents > 0 ? `<div class="row-btns" style="margin-top:12px">${CREDIT_PACKS.map((n) => `<button class="btn ${n === 5000 ? 'primary' : ''}" data-act="buy-credits" data-n="${n}" data-client="${client.id}">${n.toLocaleString('en-AU')} credits · ${money(client.price_per_1000_credits_cents * n / 1000)}</button>`).join('')}</div>
+      ${client.price_per_1000_credits_cents > 0 ? `<div class="row-btns" style="margin-top:12px">${CREDIT_PACKS.map((n) => `<button class="btn ${n === 5000 ? 'primary' : ''}" data-act="buy-credits" data-n="${n}" data-client="${client.id}">${n.toLocaleString('en-AU')} credits · ${money(client.price_per_1000_credits_cents * n / 1000)}${plusGst}</button>`).join('')}</div>
         <div class="small muted" style="margin-top:6px">Paid securely by card through Stripe. Nothing is saved for next time.</div>` : '<div class="small muted" style="margin-top:8px">Credit price not set yet.</div>'}
     </div>
     <div class="card table-wrap"><h4>Credit history</h4>${(ledger.data || []).length ? `<table class="tbl"><thead><tr><th>When</th><th>Change</th><th>Balance</th><th>Details</th></tr></thead><tbody>
       ${(ledger.data || []).map((l) => `<tr><td class="small">${esc(fmtWhen(l.created_at))}</td><td style="color:${l.delta > 0 ? 'var(--good)' : 'var(--bad)'}">${l.delta > 0 ? '+' : ''}${l.delta.toLocaleString('en-AU')}</td><td>${l.balance_after.toLocaleString('en-AU')}</td>
-        <td class="small">${esc(l.reason === 'purchase' ? `Purchase ${l.amount_cents != null ? money(l.amount_cents) : ''}` : l.reason === 'adjustment' ? `Adjusted${l.created_by ? ` by ${l.created_by}` : ''}` : l.reason)}${l.note ? ` · ${esc(l.note)}` : ''}</td></tr>`).join('')}</tbody></table>`
+        <td class="small">${esc(l.reason === 'purchase' ? `Purchase ${l.amount_cents != null ? `${money(l.amount_cents)} incl. GST` : ''}` : l.reason === 'adjustment' ? `Adjusted${l.created_by ? ` by ${l.created_by}` : ''}` : l.reason)}${l.note ? ` · ${esc(l.note)}` : ''}</td></tr>`).join('')}</tbody></table>`
       : '<div class="small muted">No purchases yet. Usage is itemised below.</div>'}</div>`;
   } else if (client.billing_mode === 'per_booking') {
     const cap = client.monthly_booking_cap;
     main = `<div class="card"><h4>Card on file</h4>
       ${client.stripe_payment_method_id ? `<div style="font-size:18px;font-weight:600">${esc((client.card_brand || 'Card').replace(/^./, (x) => x.toUpperCase()))} •••• ${esc(client.card_last4 || '')}</div>`
         : '<div style="color:var(--bad);font-weight:600">No card yet. New handraisers won\'t go out until one is added.</div>'}
-      <div class="small muted" style="margin:6px 0 10px">${money(client.price_per_booking_cents)} per booked callback, charged weekly. Bookings can be disputed within ${DISPUTE_HOURS} hours.${cap != null ? ` Monthly cap: ${monthCharges.length} of ${cap} used; bookings over the cap are free.` : ''}</div>
+      <div class="small muted" style="margin:6px 0 10px">${money(client.price_per_booking_cents)}${plusGst} per booked callback, charged weekly.${GST > 0 ? ` GST (${Math.round(GST * 100)}%) is added to each charge.` : ''} Bookings can be disputed within ${DISPUTE_HOURS} hours.${cap != null ? ` Monthly cap: ${monthCharges.length} of ${cap} used; bookings over the cap are free.` : ''}</div>
       <div class="row-btns"><button class="btn primary" data-act="card-setup" data-client="${client.id}">${client.stripe_payment_method_id ? 'Update card' : 'Add a card'}</button>
       ${S.isAdmin ? `<button class="btn" data-act="charge-now" data-client="${client.id}">Charge due bookings now</button>` : ''}</div>
     </div>
-    <div class="card table-wrap"><h4>Booked callbacks</h4>${ch.length ? `<table class="tbl"><thead><tr><th>Lead</th><th>Booked</th><th>Amount</th><th>Status</th><th></th></tr></thead><tbody>
+    <div class="card table-wrap"><h4>Booked callbacks</h4>${ch.length ? `<table class="tbl"><thead><tr><th>Lead</th><th>Booked</th><th>Amount (excl. GST)</th><th>Status</th><th></th></tr></thead><tbody>
       ${ch.map((c) => {
         const canDispute = c.status === 'pending' && (S.isAdmin || Date.now() - new Date(c.booked_at) < DISPUTE_HOURS * 3600e3);
         const btns = [
@@ -1339,16 +1342,16 @@ async function renderBilling() {
       <div class="stat"><b>${t.call_minutes}</b><span>Call mins</span></div>
       <div class="stat good"><b>${t.booking}</b><span>Booked</span></div></div>
     <div class="small muted" style="margin-top:8px">SMS counted in segments (160 characters each, 70 with emoji).${client.billing_mode === 'credits' ? ` ${t.credits.toLocaleString('en-AU')} credits used.` : ''}</div>
-    ${S.isAdmin ? `<div class="note-box" style="margin-top:10px">Admin only. Revenue this month <b>${money(revenue)}</b> · estimated cost <b>${money(estCost(t))}</b> · margin <b>${money(revenue - estCost(t))}</b><br><span class="muted">Cost is an estimate from config.js (${CFG.costs.smsSegmentCents}c per segment, ${CFG.costs.callMinuteCents}c per call minute) plus OpenAI, which isn't counted.</span></div>` : ''}
+    ${S.isAdmin ? `<div class="note-box" style="margin-top:10px">Admin only. Revenue this month (excl. GST) <b>${money(revenue)}</b> · estimated cost <b>${money(estCost(t))}</b> · margin <b>${money(revenue - estCost(t))}</b><br><span class="muted">Cost is an estimate from config.js (${CFG.costs.smsSegmentCents}c per segment, ${CFG.costs.callMinuteCents}c per call minute) plus OpenAI, which isn't counted.</span></div>` : ''}
   </div>`;
 
   const settings = S.isAdmin ? `<div class="card"><h4>Billing settings (admin)</h4>
     <div class="fields">
       <label>Mode<select id="bs-mode">${Object.entries(MODE_LABEL).map(([k, v]) => `<option value="${k}" ${k === client.billing_mode ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
       <label>Billing email (receipts)<input id="bs-email" value="${esc(client.billing_email || '')}" placeholder="${esc(client.notify_email || '')}"></label>
-      <label>Price per booking ($)<input id="bs-booking" type="number" min="0" step="0.01" value="${(client.price_per_booking_cents / 100).toFixed(2)}"></label>
+      <label>Price per booking ($, excl. GST)<input id="bs-booking" type="number" min="0" step="0.01" value="${(client.price_per_booking_cents / 100).toFixed(2)}"></label>
       <label>Monthly booking cap (blank = none)<input id="bs-cap" type="number" min="0" value="${client.monthly_booking_cap ?? ''}"></label>
-      <label>Price per 1,000 credits ($)<input id="bs-credits" type="number" min="0" step="0.01" value="${(client.price_per_1000_credits_cents / 100).toFixed(2)}"></label>
+      <label>Price per 1,000 credits ($, excl. GST)<input id="bs-credits" type="number" min="0" step="0.01" value="${(client.price_per_1000_credits_cents / 100).toFixed(2)}"></label>
       <label>Credits per call minute<input id="bs-minute" type="number" min="0" value="${client.credits_per_call_minute}"></label>
       <label>Overdraft for live conversations (credits)<input id="bs-overdraft" type="number" min="0" value="${client.credit_overdraft}"></label>
     </div>
@@ -1374,7 +1377,7 @@ async function renderBillingOverview(el) {
     const t = usageTotals((usage || []).filter((u) => u.client_id === c.id));
     const open = (pending || []).filter((p) => p.client_id === c.id);
     const state = c.billing_mode === 'credits' ? `${(c.credit_balance || 0).toLocaleString('en-AU')} credits`
-      : c.billing_mode === 'per_booking' ? `${c.stripe_payment_method_id ? `${esc(c.card_brand || 'card')} •••• ${esc(c.card_last4 || '')}` : '<span style="color:var(--bad)">No card</span>'}${open.length ? ` · ${open.length} due ${money(open.reduce((a, p) => a + p.amount_cents, 0))}` : ''}${open.some((p) => p.status === 'failed') ? ' · <span style="color:var(--bad)">failed charge</span>' : ''}${open.some((p) => p.status === 'disputed') ? ' · <span style="color:var(--warm)">dispute</span>' : ''}`
+      : c.billing_mode === 'per_booking' ? `${c.stripe_payment_method_id ? `${esc(c.card_brand || 'card')} •••• ${esc(c.card_last4 || '')}` : '<span style="color:var(--bad)">No card</span>'}${open.length ? ` · ${open.length} due ${money(open.reduce((a, p) => a + p.amount_cents, 0))}${plusGst}` : ''}${open.some((p) => p.status === 'failed') ? ' · <span style="color:var(--bad)">failed charge</span>' : ''}${open.some((p) => p.status === 'disputed') ? ' · <span style="color:var(--warm)">dispute</span>' : ''}`
       : '-';
     return `<tr><td><button class="link" data-act="billing-client" data-id="${c.id}">${esc(c.name)}</button></td><td>${esc(MODE_LABEL[c.billing_mode] || c.billing_mode)}</td><td class="small">${state}</td>
       <td>${(t.sms_out + t.sms_in).toLocaleString('en-AU')}</td><td>${t.call_minutes}</td><td>${t.booking}</td><td class="small">${money(estCost(t))}</td></tr>`;

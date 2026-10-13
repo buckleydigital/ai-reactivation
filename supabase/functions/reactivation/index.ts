@@ -36,6 +36,8 @@
 //   APP_URL                 the app's address, for invite emails
 //   STRIPE_SECRET_KEY       billing: the same Stripe account as ql-hq
 //   STRIPE_WEBHOOK_SECRET   billing: whsec_... of this function's endpoint
+//   GST_RATE                optional, default 0.1: GST added on top of every
+//                           charge. Set 0 if QuoteLeads isn't GST-registered.
 //   CF_TURNSTILE_SECRET     optional, the demo form then requires Turnstile
 //   RESEND_API_KEY          emails: callback alerts and demo bookings
 //   NOTIFY_FROM_EMAIL       optional, the From address for those emails
@@ -989,6 +991,10 @@ async function refreshInsights(leadId: string): Promise<Row | null> {
 // Usage is recorded in every mode, so you can see volume and margin.
 
 const DISPUTE_HOURS = Number(env("BOOKING_DISPUTE_HOURS", "48"));
+// Prices are set excluding GST; GST is added on top when charging. Keep in
+// step with gstRate in assets/config.js, which only affects what's displayed.
+const GST_RATE = Math.max(0, Number(env("GST_RATE", "0.1")) || 0);
+const gstOn = (cents: number) => Math.round(cents * GST_RATE);
 const CONSENT_TEXT = "Every lead in this file enquired with this business and has agreed to be contacted by it.";
 
 async function getClient(id: string): Promise<Row | null> {
@@ -1183,15 +1189,18 @@ async function chargeBookings(client: Row): Promise<Row> {
   }
   try {
     const pi = await stripe("/payment_intents", {
-      amount: total, currency: "aud", customer: client.stripe_customer_id, payment_method: client.stripe_payment_method_id,
+      amount: total + gstOn(total), currency: "aud", customer: client.stripe_customer_id, payment_method: client.stripe_payment_method_id,
       off_session: "true", confirm: "true",
-      description: `${ids.length} booked callback${ids.length === 1 ? "" : "s"}`,
+      // The receipt shows only this text and the total, so the GST is spelled out.
+      description: `${ids.length} booked callback${ids.length === 1 ? "" : "s"}: $${(total / 100).toFixed(2)}` +
+        (GST_RATE > 0 ? ` + GST $${(gstOn(total) / 100).toFixed(2)}` : ""),
+      "metadata[subtotal_cents]": total, "metadata[gst_cents]": gstOn(total),
       receipt_email: client.billing_email || undefined,
       ...META(client, "rx_bookings"),
     }, { idem: `rx-bookings-${hex(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(ids.join(",")))))}` });
     if (pi.status === "succeeded") {
       await done({ status: "charged", charged_at: new Date().toISOString(), payment_intent_id: pi.id });
-      return { client: client.name, charged: total, bookings: ids.length };
+      return { client: client.name, charged: total + gstOn(total), bookings: ids.length };
     }
     await done({ status: "failed", payment_intent_id: pi.id, error: `Payment ${pi.status.replace(/_/g, " ")}` });
     return { client: client.name, error: pi.status };
@@ -1960,6 +1969,13 @@ async function handleApi(req: Request): Promise<Response> {
         "line_items[0][price_data][unit_amount]": amount,
         "line_items[0][price_data][product_data][name]": `${credits.toLocaleString("en-AU")} credits`,
         "line_items[0][price_data][product_data][description]": "1 credit per SMS segment sent or received",
+        // GST as its own line, so the receipt shows it.
+        ...(GST_RATE > 0 ? {
+          "line_items[1][quantity]": 1,
+          "line_items[1][price_data][currency]": "aud",
+          "line_items[1][price_data][unit_amount]": gstOn(amount),
+          "line_items[1][price_data][product_data][name]": `GST (${Math.round(GST_RATE * 100)}%)`,
+        } : {}),
         customer: client.stripe_customer_id || undefined,
         customer_email: client.stripe_customer_id ? undefined : client.billing_email || profile.email || undefined,
         client_reference_id: client.id,
