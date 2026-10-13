@@ -10,6 +10,9 @@
 //   POST /twilio/status  Twilio: delivery status of a text we sent
 //   POST /twilio/voice   Twilio: a call came in on the shared number
 //   POST /openai/call    OpenAI: the call has reached the Realtime API
+//   POST /twilio/dial-done  Twilio: the AI call ended (its length is billed)
+//   POST /stripe/webhook    Stripe: a credit pack was paid, or a card saved
+//   POST /billing/charge    weekly booking charges, called by pg_cron
 //
 // "Enforce JWT verification" must be OFF for this function: Twilio, OpenAI and
 // pg_cron cannot send a Supabase JWT. Each route authenticates itself instead:
@@ -28,6 +31,8 @@
 //   CRON_SECRET             required, same value as in 003_send_queue_cron.sql
 //   SIP_HEADER_SECRET       for calls: any long random string
 //   APP_URL                 the app's address, for invite emails
+//   STRIPE_SECRET_KEY       billing: the same Stripe account as ql-hq
+//   STRIPE_WEBHOOK_SECRET   billing: whsec_... of this function's endpoint
 //   RESEND_API_KEY          optional, emails "callback booked" alerts
 //   NOTIFY_FROM_EMAIL       optional, the From address for those emails
 // =============================================================================
@@ -91,6 +96,9 @@ Deno.serve(async (req) => {
       case "/twilio/status": return await handleTwilioStatus(req);
       case "/twilio/voice": return await handleTwilioVoice(req);
       case "/openai/call": return await handleOpenAiCall(req);
+      case "/twilio/dial-done": return await handleTwilioDialDone(req);
+      case "/stripe/webhook": return await handleStripeWebhook(req);
+      case "/billing/charge": return await handleBillingCharge(req);
       default: return json({ error: "Not found" }, 404);
     }
   } catch (e) {
@@ -606,9 +614,18 @@ function allRequiredAnswered(agent: Agent, q: Row): boolean {
 }
 
 // Stores a message and, unless it is a demo lead, sends it by SMS.
-async function deliver(lead: Row, body: string, author: "ai" | "human" | "system", opts: { ignoreOptOut?: boolean } = {}) {
+async function deliver(
+  lead: Row, body: string, author: "ai" | "human" | "system",
+  opts: { ignoreOptOut?: boolean; kind?: "handraiser" | "reply" } = {},
+) {
   body = noEmDash(body);
   const now = new Date().toISOString();
+  // System texts (the STOP confirmation) are always sent and never charged.
+  const client = lead.is_demo || author === "system" ? null : await getClient(lead.client_id);
+  if (client) {
+    const blocked = await sendBlock(client, opts.kind || "reply");
+    if (blocked) throw new HttpError(402, blocked);
+  }
   if (lead.is_demo) {
     await db.from("messages").insert({
       client_id: lead.client_id, lead_id: lead.id, direction: "outbound", channel: "demo", author, body, status: "delivered",
@@ -624,6 +641,7 @@ async function deliver(lead: Row, body: string, author: "ai" | "human" | "system
     try {
       const sid = await twilioSend(lead.phone, body);
       await db.from("messages").update({ twilio_sid: sid, status: "sent" }).eq("id", msg!.id);
+      if (client) await recordUsage(client, lead.id, "sms_out", smsSegments(body), msg!.id);
     } catch (e) {
       await db.from("messages").update({ status: "failed", error: (e as Error).message }).eq("id", msg!.id);
       throw e;
@@ -689,6 +707,8 @@ async function bookCallback(ctx: Ctx, at: Date, notes: string, source: "sms" | "
   lead.status = "booked";
   await markInterested(lead, source, "agreed a callback");
   if (source !== "manual") background(notifyBooking(ctx, at, notes, rescheduled));
+  // Booked by the agent (by text or on a call): billable. One per lead, ever.
+  if (source === "sms" || source === "voice") await billBooking(ctx);
 }
 
 async function notifyBooking(ctx: Ctx, at: Date, notes: string, rescheduled: boolean) {
@@ -768,26 +788,34 @@ async function buildHandraiser(lead: Row, agent: Agent): Promise<{ text: string;
   return { text, variant };
 }
 
-async function sendHandraiser(lead: Row, campaign: Row, client: Row) {
+// Returns false when billing stopped it (out of credits, no card...), so the
+// send queue stops this client's batch. The lead goes back in the queue.
+async function sendHandraiser(lead: Row, campaign: Row, client: Row): Promise<boolean> {
   try {
     if (!lead.is_demo) {
       const { data: opted } = await db.from("opt_outs").select("phone").eq("phone", lead.phone).maybeSingle();
       if (opted) {
         await db.from("leads").update({ status: "opted_out", ai_enabled: false }).eq("id", lead.id);
-        return;
+        return true;
       }
     }
     const agent = agentConfig(campaign, client);
     const { text, variant } = await buildHandraiser(lead, agent);
-    await deliver(lead, text, "ai", { ignoreOptOut: true });
+    await deliver(lead, text, "ai", { ignoreOptOut: true, kind: "handraiser" });
     const now = new Date().toISOString();
     await db.from("leads").update({
       status: "contacted", contacted_at: now, handraiser_variant: variant, error: null,
     }).eq("id", lead.id);
     await addEvent(lead, "handraiser_sent", { variant, text });
+    return true;
   } catch (e) {
+    if (e instanceof HttpError && e.status === 402) {
+      await db.from("leads").update({ status: "queued" }).eq("id", lead.id);
+      return false;
+    }
     console.error(`handraiser to ${lead.id} failed:`, e);
     await db.from("leads").update({ status: "failed", error: (e as Error).message.slice(0, 300) }).eq("id", lead.id);
+    return true;
   }
 }
 
@@ -943,6 +971,239 @@ async function refreshInsights(leadId: string): Promise<Row | null> {
 }
 
 // =============================================================================
+// Billing
+// =============================================================================
+// Each client is on one of three modes (clients.billing_mode):
+//   per_booking  card saved in Stripe; every callback the agent books is
+//                charged once, after a dispute window, in a weekly run
+//   credits      prepaid packs, no card; 1 credit per SMS segment in or out,
+//                credits_per_call_minute per call minute
+//   invoice      usage is recorded; you bill them outside the app
+// Usage is recorded in every mode, so you can see volume and margin.
+
+const DISPUTE_HOURS = Number(env("BOOKING_DISPUTE_HOURS", "48"));
+const CONSENT_TEXT = "Every lead in this file enquired with this business and has agreed to be contacted by it.";
+
+async function getClient(id: string): Promise<Row | null> {
+  const { data } = await db.from("clients").select("*").eq("id", id).maybeSingle();
+  return data;
+}
+
+// What carriers bill: 160 GSM characters (153 per part once split), or 70
+// (67) when the text has anything outside GSM, like an emoji or curly quote.
+const GSM = "@£$¥èéùìòÇ\nØø\rÅåΔ_ΦΓΛΩΠΨΣΘΞÆæßÉ !\"#¤%&'()*+,-./0123456789:;<=>?¡ABCDEFGHIJKLMNOPQRSTUVWXYZÄÖÑÜ§¿abcdefghijklmnopqrstuvwxyzäöñüà";
+const GSM_EXT = "^{}\\[~]|€";
+function smsSegments(text: string): number {
+  let units = 0;
+  for (const ch of text) {
+    if (GSM.includes(ch)) units += 1;
+    else if (GSM_EXT.includes(ch)) units += 2;
+    else return text.length <= 70 ? 1 : Math.ceil(text.length / 67); // UCS-2
+  }
+  return units <= 160 ? 1 : Math.ceil(units / 153);
+}
+
+// Records usage and, in credits mode, takes the credits off. Bookings are
+// recorded but never cost credits.
+async function recordUsage(client: Row, leadId: string | null, kind: "sms_out" | "sms_in" | "call_minutes" | "booking", quantity: number, ref?: string) {
+  if (!(quantity > 0)) return;
+  const credits = client.billing_mode !== "credits" || kind === "booking" ? 0
+    : kind === "call_minutes" ? quantity * (client.credits_per_call_minute ?? 10) : quantity;
+  await db.from("usage").insert({ client_id: client.id, lead_id: leadId, kind, quantity, credits, ref: ref || null });
+  if (credits) {
+    const { data: bal } = await db.rpc("use_credits", { p_client: client.id, p_credits: credits });
+    if (typeof bal === "number") client.credit_balance = bal;
+  }
+}
+
+function monthStartUtc(client: Row): string {
+  const tz = client.timezone || "Australia/Sydney";
+  const z = zoned(new Date(), tz);
+  return (localToUtc(`${z.y}-${String(z.mo).padStart(2, "0")}-01T00:00`, tz) || new Date()).toISOString();
+}
+
+async function bookingsThisMonth(client: Row): Promise<number> {
+  const { count } = await db.from("booking_charges").select("id", { count: "exact", head: true })
+    .eq("client_id", client.id).neq("status", "waived").gte("booked_at", monthStartUtc(client));
+  return count || 0;
+}
+
+// Why this client can't send right now, or null if it can. A handraiser
+// starts a new conversation; a reply carries on one that's already going, so
+// replies are allowed further (a lead mid-booking isn't dropped).
+async function sendBlock(client: Row, kind: "handraiser" | "reply"): Promise<string | null> {
+  if (client.billing_mode === "credits") {
+    const floor = kind === "handraiser" ? 0 : -(client.credit_overdraft ?? 50);
+    if ((client.credit_balance ?? 0) <= floor) return "Out of credits";
+  }
+  if (client.billing_mode === "per_booking" && kind === "handraiser") {
+    if (!client.stripe_payment_method_id) return "No card on file";
+    const { count: failed } = await db.from("booking_charges").select("id", { count: "exact", head: true })
+      .eq("client_id", client.id).eq("status", "failed");
+    if (failed) return "A booking charge failed: the card needs updating";
+    if (client.monthly_booking_cap != null && await bookingsThisMonth(client) >= client.monthly_booking_cap) {
+      return "This month's booking cap is reached";
+    }
+  }
+  return null;
+}
+
+// A booking the agent made. Recorded in every mode; in per_booking mode it
+// also becomes a charge (free once the month's cap is reached).
+async function billBooking(ctx: Ctx) {
+  const { lead } = ctx;
+  if (lead.is_demo) return;
+  const client = await getClient(lead.client_id);
+  if (!client) return;
+  const { data: seen } = await db.from("usage").select("id").eq("lead_id", lead.id).eq("kind", "booking").limit(1);
+  if (seen?.length) return; // moved, or booked again: never charged twice
+  await recordUsage(client, lead.id, "booking", 1);
+  if (client.billing_mode !== "per_booking") return;
+  const over = client.monthly_booking_cap != null && await bookingsThisMonth(client) >= client.monthly_booking_cap;
+  const { error } = await db.from("booking_charges").insert({
+    client_id: client.id, lead_id: lead.id, lead_name: leadName(lead),
+    amount_cents: over ? 0 : client.price_per_booking_cents || 0,
+    status: over ? "waived" : "pending", resolution_note: over ? "Over the monthly booking cap" : null,
+  });
+  if (error && error.code !== "23505") console.error("booking charge:", error);
+}
+
+// ---- Stripe --------------------------------------------------------------------
+// Plain REST, form-encoded. The account is shared with ql-hq: everything we
+// create carries metadata app=reactivation, and our webhook ignores the rest.
+
+async function stripe(path: string, params: Record<string, string | number | undefined> | null = {}, opts: { method?: string; idem?: string } = {}): Promise<Row> {
+  const key = env("STRIPE_SECRET_KEY");
+  if (!key) throw new HttpError(500, "Stripe isn't set up yet (STRIPE_SECRET_KEY)");
+  const method = opts.method || (params ? "POST" : "GET");
+  const body = new URLSearchParams();
+  for (const [k, v] of Object.entries(params || {})) if (v !== undefined && v !== null && v !== "") body.append(k, String(v));
+  const r = await fetch(`https://api.stripe.com/v1${path}${method === "GET" && body.toString() ? `?${body}` : ""}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${key}`, "Content-Type": "application/x-www-form-urlencoded",
+      ...(opts.idem ? { "Idempotency-Key": opts.idem } : {}),
+    },
+    body: method === "GET" ? undefined : body,
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new HttpError(r.status === 402 ? 402 : 502, j.error?.message || `Stripe error ${r.status}`);
+  return j;
+}
+
+const META = (client: Row, type: string, prefix = "metadata") => ({
+  [`${prefix}[app]`]: "reactivation", [`${prefix}[type]`]: type, [`${prefix}[client_id]`]: client.id,
+});
+
+async function ensureCustomer(client: Row): Promise<string> {
+  if (client.stripe_customer_id) return client.stripe_customer_id;
+  const c = await stripe("/customers", {
+    name: client.name, email: client.billing_email || client.notify_email?.split(",")[0]?.trim(),
+    ...META(client, "rx_customer"),
+  });
+  await db.from("clients").update({ stripe_customer_id: c.id }).eq("id", client.id);
+  client.stripe_customer_id = c.id;
+  return c.id;
+}
+
+function billingUrl(): string {
+  return `${(env("APP_URL") || "https://example.com").replace(/#.*$/, "")}#billing`;
+}
+
+async function stripeSignatureOk(header: string, body: string): Promise<boolean> {
+  const secret = env("STRIPE_WEBHOOK_SECRET");
+  if (!secret || !header) return false;
+  const parts = header.split(",").map((x) => x.split("="));
+  const t = parts.find(([k]) => k === "t")?.[1];
+  const sigs = parts.filter(([k]) => k === "v1").map(([, v]) => v);
+  if (!t || !sigs.length || Math.abs(Date.now() / 1000 - Number(t)) > 300) return false;
+  const expected = hex(await hmac("SHA-256", secret, `${t}.${body}`));
+  return sigs.some((v) => safeEqual(v, expected));
+}
+
+async function handleStripeWebhook(req: Request): Promise<Response> {
+  const body = await req.text();
+  if (!(await stripeSignatureOk(req.headers.get("Stripe-Signature") || "", body))) return json({ error: "Bad signature" }, 400);
+  const ev = JSON.parse(body);
+  const obj = ev.data?.object || {};
+  // Same Stripe account as ql-hq: anything not ours is acknowledged and left.
+  if (ev.type !== "checkout.session.completed" || obj.metadata?.app !== "reactivation") return json({ received: true });
+  const client = await getClient(obj.metadata.client_id);
+  if (!client) return json({ received: true });
+
+  if (obj.metadata.type === "rx_credits" && obj.payment_status === "paid") {
+    const credits = Number(obj.metadata.credits || 0);
+    if (credits > 0) {
+      await db.rpc("apply_credits", {
+        p_client: client.id, p_delta: credits, p_reason: "purchase", p_session: obj.id,
+        p_amount: obj.amount_total ?? null, p_note: `${credits.toLocaleString("en-AU")} credits`, p_by: obj.customer_details?.email || null,
+      });
+    }
+  }
+
+  if (obj.metadata.type === "rx_card_setup" && obj.setup_intent) {
+    const si = await stripe(`/setup_intents/${obj.setup_intent}`, null);
+    const pm = await stripe(`/payment_methods/${si.payment_method}`, null);
+    await stripe(`/customers/${obj.customer}`, { "invoice_settings[default_payment_method]": pm.id });
+    await db.from("clients").update({
+      stripe_customer_id: obj.customer, stripe_payment_method_id: pm.id,
+      card_brand: pm.card?.brand || null, card_last4: pm.card?.last4 || null,
+    }).eq("id", client.id);
+  }
+  return json({ received: true });
+}
+
+// Charges a client's bookings that are past the dispute window, as one
+// payment. Failed ones are retried next run; while any has failed, new
+// handraisers stop (see sendBlock).
+async function chargeBookings(client: Row): Promise<Row> {
+  const cutoff = new Date(Date.now() - DISPUTE_HOURS * 3600e3).toISOString();
+  const { data: due } = await db.from("booking_charges").update({ status: "charging", error: null })
+    .eq("client_id", client.id).in("status", ["pending", "failed"]).lte("booked_at", cutoff)
+    .select("id, amount_cents");
+  if (!due?.length) return { client: client.name, charged: 0 };
+  const ids = due.map((d) => d.id).sort();
+  const total = due.reduce((a, d) => a + (d.amount_cents || 0), 0);
+  const done = (patch: Row) => db.from("booking_charges").update(patch).in("id", ids);
+
+  if (total <= 0) {
+    await done({ status: "charged", charged_at: new Date().toISOString() });
+    return { client: client.name, charged: 0 };
+  }
+  if (!client.stripe_customer_id || !client.stripe_payment_method_id) {
+    await done({ status: "failed", error: "No card on file" });
+    return { client: client.name, error: "No card on file" };
+  }
+  try {
+    const pi = await stripe("/payment_intents", {
+      amount: total, currency: "aud", customer: client.stripe_customer_id, payment_method: client.stripe_payment_method_id,
+      off_session: "true", confirm: "true",
+      description: `${ids.length} booked callback${ids.length === 1 ? "" : "s"}`,
+      receipt_email: client.billing_email || undefined,
+      ...META(client, "rx_bookings"),
+    }, { idem: `rx-bookings-${hex(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(ids.join(",")))))}` });
+    if (pi.status === "succeeded") {
+      await done({ status: "charged", charged_at: new Date().toISOString(), payment_intent_id: pi.id });
+      return { client: client.name, charged: total, bookings: ids.length };
+    }
+    await done({ status: "failed", payment_intent_id: pi.id, error: `Payment ${pi.status.replace(/_/g, " ")}` });
+    return { client: client.name, error: pi.status };
+  } catch (e) {
+    await done({ status: "failed", error: (e as Error).message.slice(0, 300) });
+    return { client: client.name, error: (e as Error).message };
+  }
+}
+
+async function handleBillingCharge(req: Request): Promise<Response> {
+  const secret = env("CRON_SECRET");
+  if (!secret || !safeEqual(req.headers.get("x-cron-secret") || "", secret)) throw new HttpError(401, "Unauthorised");
+  const { data: clients } = await db.from("clients").select("*").eq("billing_mode", "per_booking").eq("is_demo", false);
+  const results = [];
+  for (const c of clients || []) results.push(await chargeBookings(c));
+  return json({ results });
+}
+
+// =============================================================================
 // Routes: Twilio
 // =============================================================================
 
@@ -981,6 +1242,8 @@ async function handleTwilioSms(req: Request): Promise<Response> {
     if (error.code === "23505") return twiml(""); // Twilio redelivered one we already have
     throw error;
   }
+  const client = await getClient(lead.client_id);
+  if (client) await recordUsage(client, lead.id, "sms_in", Number(p.NumSegments) || smsSegments(body), msg!.id);
   await onInbound(lead, body, msg!.id);
   return twiml("");
 }
@@ -1008,6 +1271,8 @@ async function handleTwilioVoice(req: Request): Promise<Response> {
   const lead = from ? await routePhone(from) : null;
   const project = env("OPENAI_PROJECT_ID"), sipSecret = env("SIP_HEADER_SECRET");
   if (!lead) return twiml("<Reject/>");
+  const billing = await getClient(lead.client_id);
+  if (billing && await sendBlock(billing, "reply")) return twiml("<Reject/>"); // out of credits, past the overdraft
   if (!project || !sipSecret) {
     console.error("Calls need OPENAI_PROJECT_ID and SIP_HEADER_SECRET");
     return twiml("<Reject/>");
@@ -1018,7 +1283,23 @@ async function handleTwilioVoice(req: Request): Promise<Response> {
   }).select("id").single();
   const sig = hex(await hmac("SHA-256", sipSecret, `${lead.id}.${call!.id}`));
   const uri = `sip:${project}@sip.api.openai.com;transport=tls?X-Lead-Id=${lead.id}&X-Call-Ref=${call!.id}&X-Rx-Sig=${sig}`;
-  return twiml(`<Dial answerOnBridge="true" timeout="25"><Sip>${escapeXml(uri)}</Sip></Dial>`);
+  // The action URL hears how long the AI leg lasted, which is what's billed.
+  return twiml(`<Dial answerOnBridge="true" timeout="25" action="${escapeXml(`${FN_BASE}/twilio/dial-done`)}" method="POST"><Sip>${escapeXml(uri)}</Sip></Dial>`);
+}
+
+async function handleTwilioDialDone(req: Request): Promise<Response> {
+  const p = await readTwilio(req, "/twilio/dial-done");
+  const seconds = Number(p.DialCallDuration || 0);
+  const { data: call } = await db.from("calls").select("*").eq("twilio_call_sid", p.CallSid || "").maybeSingle();
+  if (call && call.duration_seconds == null) {
+    await db.from("calls").update({
+      duration_seconds: seconds, ended_at: call.ended_at || new Date().toISOString(),
+      status: call.status === "ringing" ? (seconds ? "completed" : "no-answer") : call.status,
+    }).eq("id", call.id);
+    const client = await getClient(call.client_id);
+    if (client && seconds > 0) await recordUsage(client, call.lead_id, "call_minutes", Math.ceil(seconds / 60), call.id);
+  }
+  return twiml("<Hangup/>");
 }
 
 // =============================================================================
@@ -1252,12 +1533,17 @@ async function handleCron(req: Request): Promise<Response> {
     const client = c.client as Row;
     if (!client || client.is_demo || !client.active) continue;
     if (!inWindow(new Date(), client.timezone || "Australia/Sydney", c.send_window)) continue;
+    if (await sendBlock(client, "handraiser")) continue; // out of credits, no card, cap reached...
     const take = Math.min(c.send_per_minute || 6, cap - sent);
     if (take <= 0) break;
     const { data: claimed, error } = await db.rpc("claim_queued_leads", { p_campaign: c.id, p_limit: take });
     if (error) { console.error("claim:", error); continue; }
     for (const lead of claimed || []) {
-      await sendHandraiser(lead, c, client);
+      if (!(await sendHandraiser(lead, c, client))) {
+        // Billing stopped it part-way: put the rest of this batch back.
+        await db.from("leads").update({ status: "queued" }).eq("campaign_id", c.id).eq("status", "sending");
+        break;
+      }
       sent++;
     }
   }
@@ -1295,6 +1581,7 @@ async function handleApi(req: Request): Promise<Response> {
     // ---- Leads ----------------------------------------------------------
     case "import_leads": {
       adminOnly();
+      if (b.consent !== true) throw new HttpError(400, "Confirm every lead in the file agreed to be contacted by this business");
       const camp = await getCampaign(b.campaign_id);
       const rows = arr<Row>(b.rows);
       if (rows.length > 20000) throw new HttpError(400, "Upload at most 20,000 rows at a time");
@@ -1330,6 +1617,10 @@ async function handleApi(req: Request): Promise<Response> {
         if (error) throw error;
         inserted += data?.length || 0;
       }
+      await db.from("lead_imports").insert({
+        client_id: camp.client_id, campaign_id: camp.id, uploaded_by: profile.email || user.id,
+        consent_text: CONSENT_TEXT, rows_total: rows.length, inserted,
+      });
       return json({ inserted, already_existed: out.length - inserted, invalid, duplicates_in_file: dupes, opted_out: opted.size });
     }
 
@@ -1404,6 +1695,8 @@ async function handleApi(req: Request): Promise<Response> {
       const a = agentConfig(camp, camp.client);
       if (!a.handraiser_templates.length) throw new HttpError(400, "Add at least one handraiser message first");
       if (camp.client?.is_demo) throw new HttpError(400, "Demo campaigns don't send");
+      const blocked = await sendBlock(camp.client, "handraiser");
+      if (blocked) throw new HttpError(402, `${blocked}. Sort that out on the Billing page before launching.`);
       await db.from("campaigns").update({ status: "active", updated_at: new Date().toISOString() }).eq("id", camp.id);
       const { data } = await db.from("leads").update({ status: "queued" })
         .eq("campaign_id", camp.id).eq("status", "new").select("id");
@@ -1449,6 +1742,89 @@ async function handleApi(req: Request): Promise<Response> {
       const { error } = await db.auth.admin.deleteUser(String(b.user_id));
       if (error) throw new HttpError(400, error.message);
       return json({ ok: true });
+    }
+
+    // ---- Billing -------------------------------------------------------------
+    case "credits_checkout": {
+      const client = await getClient(String(b.client_id || profile.client_id));
+      if (!client || (!isAdmin && client.id !== profile.client_id)) throw new HttpError(404, "Client not found");
+      if (client.billing_mode !== "credits") throw new HttpError(400, "This account isn't on prepaid credits");
+      if (!(client.price_per_1000_credits_cents > 0)) throw new HttpError(400, "No credit price is set for this account yet");
+      const credits = Math.round(Number(b.credits) / 500) * 500;
+      if (!(credits >= 500 && credits <= 200000)) throw new HttpError(400, "Choose between 500 and 200,000 credits");
+      const amount = Math.round(client.price_per_1000_credits_cents * credits / 1000);
+      const session = await stripe("/checkout/sessions", {
+        mode: "payment",
+        "line_items[0][quantity]": 1,
+        "line_items[0][price_data][currency]": "aud",
+        "line_items[0][price_data][unit_amount]": amount,
+        "line_items[0][price_data][product_data][name]": `${credits.toLocaleString("en-AU")} credits`,
+        "line_items[0][price_data][product_data][description]": "1 credit per SMS segment sent or received",
+        customer: client.stripe_customer_id || undefined,
+        customer_email: client.stripe_customer_id ? undefined : client.billing_email || profile.email || undefined,
+        client_reference_id: client.id,
+        success_url: `${billingUrl()}-done`, cancel_url: `${billingUrl()}`,
+        ...META(client, "rx_credits"), "metadata[credits]": credits,
+        ...META(client, "rx_credits", "payment_intent_data[metadata]"),
+      });
+      return json({ url: session.url });
+    }
+
+    case "card_setup": {
+      const client = await getClient(String(b.client_id || profile.client_id));
+      if (!client || (!isAdmin && client.id !== profile.client_id)) throw new HttpError(404, "Client not found");
+      const customer = await ensureCustomer(client);
+      const session = await stripe("/checkout/sessions", {
+        mode: "setup", customer, "payment_method_types[0]": "card", currency: "aud",
+        success_url: `${billingUrl()}-done`, cancel_url: `${billingUrl()}`,
+        ...META(client, "rx_card_setup"), ...META(client, "rx_card_setup", "setup_intent_data[metadata]"),
+      });
+      return json({ url: session.url });
+    }
+
+    case "booking_dispute": {
+      const { data: ch } = await db.from("booking_charges").select("*").eq("id", b.charge_id).maybeSingle();
+      if (!ch || (!isAdmin && ch.client_id !== profile.client_id)) throw new HttpError(404, "Charge not found");
+      if (ch.status !== "pending") throw new HttpError(409, "Only a booking that hasn't been charged yet can be disputed");
+      if (!isAdmin && Date.now() - new Date(ch.booked_at).getTime() > DISPUTE_HOURS * 3600e3) {
+        throw new HttpError(409, `Bookings can be disputed within ${DISPUTE_HOURS} hours`);
+      }
+      const reason = clean(b.reason, 500);
+      if (!reason) throw new HttpError(400, "Say why this booking shouldn't be charged");
+      await db.from("booking_charges").update({
+        status: "disputed", dispute_reason: reason, disputed_at: new Date().toISOString(), disputed_by: profile.email,
+      }).eq("id", ch.id);
+      return json({ ok: true });
+    }
+
+    case "booking_resolve": {
+      adminOnly();
+      const { data: ch } = await db.from("booking_charges").select("*").eq("id", b.charge_id).maybeSingle();
+      if (!ch) throw new HttpError(404, "Charge not found");
+      if (!["pending", "disputed", "failed"].includes(ch.status)) throw new HttpError(409, `This charge is already ${ch.status}`);
+      await db.from("booking_charges").update({
+        status: b.decision === "waive" ? "waived" : "pending",
+        resolution_note: clean(b.note, 500), resolved_by: profile.email,
+      }).eq("id", ch.id);
+      return json({ ok: true });
+    }
+
+    case "credits_adjust": {
+      adminOnly();
+      const delta = Math.trunc(Number(b.delta));
+      if (!delta) throw new HttpError(400, "Enter how many credits to add or take away");
+      const balance = await db.rpc("apply_credits", {
+        p_client: b.client_id, p_delta: delta, p_reason: "adjustment", p_note: clean(b.note, 300), p_by: profile.email,
+      });
+      if (balance.error) throw balance.error;
+      return json({ balance: balance.data });
+    }
+
+    case "billing_charge_now": {
+      adminOnly();
+      const client = await getClient(String(b.client_id));
+      if (!client || client.billing_mode !== "per_booking") throw new HttpError(400, "This client isn't billed per booking");
+      return json(await chargeBookings(client));
     }
 
     // ---- Do Not Contact list -------------------------------------------------
