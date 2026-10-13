@@ -89,6 +89,29 @@ const FILTERS = [
 ];
 
 const VOICES = ['marin', 'cedar', 'alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse'];
+// OpenAI introduced marin and cedar as its most natural voices for live calls.
+// The rest are best judged by ear, with the preview button.
+const voiceOptions = (sel) => VOICES.map((v) => `<option value="${v}" ${v === sel ? 'selected' : ''}>${v}${v === 'marin' || v === 'cedar' ? ' (recommended)' : ''}</option>`).join('');
+
+// Plays a few seconds of a voice reading the greeting. One player at a time.
+let previewAudio = null;
+async function previewVoice(btn, opts) {
+  await busy(btn, async () => {
+    const label = btn.textContent;
+    btn.textContent = 'Loading…';
+    try {
+      const r = await api('voice_preview', opts);
+      previewAudio?.pause();
+      previewAudio = new Audio(r.audio);
+      btn.textContent = '■ Playing';
+      previewAudio.onended = () => { btn.textContent = label; };
+      await previewAudio.play();
+    } catch (e) {
+      btn.textContent = label;
+      throw e;
+    }
+  });
+}
 const TIMEZONES = ['Australia/Sydney', 'Australia/Melbourne', 'Australia/Brisbane', 'Australia/Adelaide', 'Australia/Darwin', 'Australia/Perth', 'Australia/Hobart', 'Pacific/Auckland', 'Europe/London', 'America/New_York', 'America/Los_Angeles'];
 const DAY_LABELS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
@@ -725,7 +748,7 @@ function campaignEditor(c) {
       <label>Agent name<input id="ce-bot" value="${esc(a.bot_name || '')}"></label>
       <label>Business name (as the lead knows it)<input id="ce-company" value="${esc(a.company_name || '')}" placeholder="Defaults to the client's name"></label>
       <label>Service (used when a lead has none)<input id="ce-service" value="${esc(a.service || '')}"></label>
-      <label>Voice for inbound calls<select id="ce-voice">${VOICES.map((v) => `<option ${v === (a.voice || 'marin') ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+      <label>Voice for inbound calls<span style="display:flex;gap:6px;margin-top:4px"><select id="ce-voice" style="margin-top:0">${voiceOptions(a.voice || 'marin')}</select><button class="btn small" type="button" id="ce-voice-play" title="Hear this voice">▶ Preview</button></span></label>
       <label class="full">Tone<textarea id="ce-tone" rows="2">${esc(a.tone || '')}</textarea></label>
     </div>
     <div class="section-title">Handraiser</div>
@@ -776,6 +799,10 @@ function campaignEditor(c) {
   };
   m.addEventListener('input', preview);
   preview();
+  $('#ce-voice-play', m).onclick = (e) => previewVoice(e.currentTarget, {
+    voice: $('#ce-voice', m).value, bot_name: $('#ce-bot', m).value,
+    company_name: $('#ce-company', m).value || clientById($('#ce-client', m).value)?.name, service: $('#ce-service', m).value,
+  });
 
   $('#ce-niche', m).addEventListener('change', (e) => {
     const p = presetBySlug(e.target.value);
@@ -1369,17 +1396,26 @@ function demoModal() {
       <label>Agent name<input id="dm-bot" placeholder="${esc(S.presets[0]?.config?.bot_name || 'Sarah')}"></label>
       <label>Lead's first name<input id="dm-first" value="Alex"></label>
       <label class="full">What the lead enquired about<input id="dm-service" placeholder="${esc(S.presets[0]?.config?.service || '')}"></label>
+      <label class="full">Voice, if the lead calls<span style="display:flex;gap:6px;margin-top:4px"><select id="dm-voice" style="margin-top:0">${voiceOptions(S.presets[0]?.config?.voice || 'marin')}</select><button class="btn small" type="button" id="dm-voice-play">▶ Preview</button></span></label>
     </div>`,
   `<button class="btn" data-act="close-modal">Cancel</button><button class="btn primary" id="dm-go">Start demo</button>`);
   $('#dm-niche', m).onchange = (e) => {
     const p = presetBySlug(e.target.value);
     $('#dm-bot', m).placeholder = p?.config?.bot_name || '';
     $('#dm-service', m).placeholder = p?.config?.service || '';
+    $('#dm-voice', m).value = p?.config?.voice || 'marin';
+  };
+  $('#dm-voice-play', m).onclick = (e) => {
+    const p = presetBySlug($('#dm-niche', m).value)?.config || {};
+    previewVoice(e.currentTarget, {
+      voice: $('#dm-voice', m).value, bot_name: $('#dm-bot', m).value || p.bot_name,
+      company_name: $('#dm-company', m).value, first_name: $('#dm-first', m).value, service: $('#dm-service', m).value || p.service,
+    });
   };
   $('#dm-go', m).onclick = (e) => busy(e.target, async () => {
     const r = await api('demo_start', {
       niche: $('#dm-niche', m).value, company_name: $('#dm-company', m).value, bot_name: $('#dm-bot', m).value,
-      first_name: $('#dm-first', m).value, service: $('#dm-service', m).value,
+      first_name: $('#dm-first', m).value, service: $('#dm-service', m).value, voice: $('#dm-voice', m).value,
     });
     closeModal();
     await loadReference();
