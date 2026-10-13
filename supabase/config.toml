@@ -1,0 +1,7 @@
+# Only needed if you deploy with the Supabase CLI instead of pasting into the
+# dashboard. Twilio, OpenAI and pg_cron can't send a Supabase JWT, so the
+# function checks each caller itself (see the header of its index.ts).
+project_id = "vcantdssoketpxaybtwh"
+
+[functions.reactivation]
+verify_jwt = false
