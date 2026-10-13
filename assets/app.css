@@ -114,8 +114,10 @@ label > input, label > select, label > textarea { margin-top: 4px; color: var(--
   border-bottom: 1px solid var(--line); background: rgba(5, 11, 20, .8); backdrop-filter: blur(12px); position: relative; z-index: 5;
 }
 .brand { display: flex; align-items: center; gap: 10px; flex: none; }
-.brand .lockup-word { font-size: 20px; }
-.brand-by img { height: 15px; }
+.brand { flex-direction: column; align-items: flex-start; gap: 3px; }
+.brand .lockup-word { font-size: 19px; }
+.brand-by { font-size: 10px; gap: 5px; }
+.brand-by img { height: 12px; }
 .brand-q { display: none; height: 28px; width: 28px; border-radius: 7px; }
 .views { display: flex; gap: 4px; }
 .views button { background: none; border: 0; padding: 8px 12px; border-radius: 8px; color: var(--ink2); cursor: pointer; font-weight: 500; }
@@ -353,6 +355,7 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 @media (max-width: 860px) {
   :root { --top: 52px; }
   .top { gap: 8px; padding: 0 12px; }
+  .brand { flex-direction: row; }
   .brand .lockup-word, .brand-by { display: none; }
   .brand-q { display: block; }
   .lockup-lg .lockup-word { font-size: 32px; }

@@ -41,10 +41,26 @@ img { max-width: 100%; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 
 /* ---------- Lockup: "Reactivate by quoteleads" ---------- */
-.lockup { display: inline-flex; align-items: center; gap: 12px; text-decoration: none; color: var(--ink); }
-.lockup-word { font-family: var(--display); font-weight: 800; font-size: 24px; letter-spacing: .01em; line-height: 1; }
-.lockup-by { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--ink3); letter-spacing: .04em; white-space: nowrap; }
-.lockup-by img { height: 16px; width: auto; display: block; }
+.lockup { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 4px; text-decoration: none; color: var(--ink); }
+.lockup-word { font-family: var(--display); font-weight: 800; font-size: 23px; letter-spacing: .01em; line-height: 1; }
+/* "by [quoteleads logo]", small, under the product name. */
+.lockup-by { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--ink3); letter-spacing: .05em; white-space: nowrap; line-height: 1; }
+.lockup-by img { height: 13px; width: auto; display: block; }
+
+/* ---------- Line icons ---------- */
+.i { width: 1em; height: 1em; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; vertical-align: -.125em; }
+.btn .i { width: 16px; height: 16px; }
+.icon .i { width: 20px; height: 20px; color: var(--hud); }
+.chip { display: inline-flex; align-items: center; gap: 8px; }
+.chip .i { width: 17px; height: 17px; color: var(--hud); }
+.float.tag { display: inline-flex; align-items: center; gap: 6px; }
+.float.tag .i { width: 14px; height: 14px; }
+.evt { display: inline-flex; align-items: center; gap: 6px; }
+.evt .i { width: 14px; height: 14px; }
+.qual .tick .i { width: 12px; height: 12px; stroke-width: 3; }
+.deal-ic { -webkit-text-fill-color: initial; line-height: 1; }
+.deal-ic .i { width: 42px; height: 42px; color: var(--hud); stroke-width: 1.6; }
+.done-badge .i { width: 32px; height: 32px; stroke-width: 3; color: #04220f; }
 .grad {
   background: linear-gradient(92deg, #ffffff 0%, #bdeeff 45%, var(--hud) 75%, var(--blue));
   -webkit-background-clip: text; background-clip: text; color: transparent;
@@ -216,7 +232,8 @@ footer { border-top: 1px solid var(--line); padding: 40px 0 34px; margin-top: 40
 @media (max-width: 860px) {
   .nav-links { display: none; }
   .nav .wrap { gap: 12px; }
-  .lockup-by { display: none; }
+  .lockup-word { font-size: 21px; }
+  .lockup-by img { height: 12px; }
   .hero { padding: 40px 0 10px; }
   .hero .wrap { grid-template-columns: 1fr; }
   .hero-visual { max-width: 460px; width: 100%; margin: 0 auto; min-height: 300px; }
@@ -283,9 +300,9 @@ footer { border-top: 1px solid var(--line); padding: 40px 0 34px; margin-top: 40
 .turnstile { margin-top: 16px; min-height: 0; }
 .book-actions { display: flex; gap: 10px; margin-top: 16px; flex-wrap: wrap; }
 .book-actions .btn.primary { flex: 1; }
-.done { text-align: center; padding: 10px 0; }
+.book-done { text-align: center; padding: 10px 0; }
 .done-badge { width: 64px; height: 64px; border-radius: 50%; margin: 0 auto 6px; display: grid; place-items: center; font-size: 30px; font-weight: 800; color: #04220f; background: var(--good); box-shadow: 0 0 40px rgba(61, 220, 151, .45); }
-.done h2 { margin: 10px 0 6px; }
+.book-done h2 { margin: 10px 0 6px; }
 .done-when { font: 700 20px/1.3 var(--display); color: var(--hud); }
 @media (max-width: 860px) {
   .book { padding-top: 30px; }
