@@ -488,6 +488,7 @@ ${factSheet(ctx)}
 
 ## Your output
 - reply: the next text to send, or "" if nothing needs saying (for example after they say "thanks" to a goodbye).
+- lead_interested: true if the lead has shown ANY interest so far, including a plain "yes", "yep" or "that's me" to our first text, answering a qualifying question, asking about price or next steps, or agreeing to a call. False only if they have said no, wrong person, stop, or have not engaged yet.
 - callback: only when they've agreed to a specific time. local_time is "YYYY-MM-DDTHH:MM" in the business's timezone, and must be inside the callback hours. Otherwise null.
 - qualification: answers learned from their LATEST messages, keyed by the question keys above. Values are short.
 - summary: 1-2 sentences on where things stand, for the business owner.
@@ -538,9 +539,10 @@ const QUAL_ITEMS = {
 
 const TURN_SCHEMA = {
   type: "object", additionalProperties: false,
-  required: ["reply", "intent", "sentiment", "qualification", "disqualified", "disqualify_reason", "callback", "summary", "next_action"],
+  required: ["reply", "intent", "lead_interested", "sentiment", "qualification", "disqualified", "disqualify_reason", "callback", "summary", "next_action"],
   properties: {
     reply: { type: "string" },
+    lead_interested: { type: "boolean" },
     intent: { type: "string", enum: ["positive", "question", "booking", "not_interested", "wrong_person", "opt_out", "unclear", "other"] },
     sentiment: { type: "string", enum: ["positive", "neutral", "negative"] },
     qualification: QUAL_ITEMS,
@@ -782,6 +784,16 @@ async function sendHandraiser(lead: Row, campaign: Row, client: Row) {
 
 // ---- Inbound -------------------------------------------------------------------
 
+// A clear "yes" ticks Anchor 1 the moment it arrives, without waiting on the
+// agent (or its reply delay). Anything with a hint of "no" is left to the
+// agent to judge.
+const CLEAR_YES = /^(yes|yeah|yea|yep|yup|ya|y|sure|correct|definitely|absolutely|of course|still keen|still interested|keen|interested|that'?s me|thats me|it is|it'?s me|this is (him|her|me)|i am|yes please|ok(ay)?)\b/i;
+const HAS_NO = /\b(no|nah|nope|not|n't|never|stop|wrong|don'?t|dont|unsubscribe|remove|cancel|longer|already)\b/i;
+const isClearYes = (body: string) => {
+  const t = body.trim().toLowerCase().replace(/[!.,]+/g, " ").trim();
+  return t.length <= 120 && CLEAR_YES.test(t) && !HAS_NO.test(t);
+};
+
 const STOP_WORDS = /^(stop|stop all|stopall|unsubscribe|unsub|cancel|end|quit|opt ?out|remove me|stop texting me|stop messaging me)[\s.!]*$/i;
 
 // Runs for every message from a lead, by SMS or in a demo.
@@ -805,6 +817,8 @@ async function onInbound(lead: Row, body: string, messageId: string) {
     if ((STAGE[lead.status] ?? 9) < STAGE.replied) patch.status = "replied";
     await addEvent(lead, "lead_replied", { channel: lead.is_demo ? "demo" : "sms", text: body.slice(0, 300) });
   }
+  if (!lead.interested_at && isClearYes(body)) await markInterested(lead, lead.is_demo ? "demo" : "sms", "positive reply");
+
   const willReply = lead.ai_enabled && !CLOSED.includes(lead.status);
   const wait = replyDelay(!!lead.is_demo);
   // Shown in the app as "replies in about 40s", so a person watching can
@@ -881,8 +895,8 @@ async function runAgentTurn(leadId: string) {
     Object.assign(lead, patch);
 
     if (turn.intent === "opt_out") await optOut(lead, "asked");
-    else if (["positive", "booking"].includes(turn.intent) || status === "qualified") {
-      await markInterested(lead, lead.is_demo ? "demo" : "sms", turn.intent === "positive" || turn.intent === "booking" ? "positive reply" : "answered the qualifying questions");
+    else if (turn.lead_interested || ["positive", "booking"].includes(turn.intent) || status === "qualified") {
+      await markInterested(lead, lead.is_demo ? "demo" : "sms", status === "qualified" && !turn.lead_interested ? "answered the qualifying questions" : "positive reply");
     }
     if (booking) await bookCallback(ctx, booking, turn.callback?.notes || "", lead.is_demo ? "demo" : "sms");
 
