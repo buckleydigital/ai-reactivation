@@ -590,7 +590,7 @@ function renderInsights() {
     </div>
 
     <div class="card">
-      <h4>Qualification</h4>
+      <h4 style="display:flex;align-items:center">Qualification${S.isAdmin && camp ? '<button class="link small" data-act="questions-edit" style="margin-left:auto;font-family:var(--sans);letter-spacing:0;text-transform:none">Edit questions</button>' : ''}</h4>
       ${qs.length || extraKeys.length ? `<ul class="qual">${qs.map((x) => `<li class="${q[x.key] ? 'done' : ''}"><span class="tick">${q[x.key] ? '✓' : ''}</span>
         <span><span class="q">${esc(x.question)}</span>${x.required ? '<span class="req">required</span>' : ''}<br><span class="a">${q[x.key] ? esc(q[x.key]) : '-'}</span></span></li>`).join('')}
         ${extraKeys.map((k) => `<li class="done"><span class="tick">✓</span><span><span class="q">${esc(k)}</span><br><span class="a">${esc(q[k])}</span></span></li>`).join('')}</ul>`
@@ -610,7 +610,7 @@ function renderInsights() {
           <option value="not_interested">Not interested</option><option value="wrong_person">Wrong person</option>
           <option value="disqualified">Disqualified</option>
         </select>
-        ${l.is_demo && S.isAdmin ? '<button class="btn danger" data-act="demo-reset" style="grid-column:1/-1">Restart this demo</button>' : ''}
+        ${l.is_demo && S.isAdmin ? '<button class="btn" data-act="demo-reset">Restart demo</button><button class="btn danger" data-act="demo-delete">Delete demo</button>' : ''}
       </div>
       <form class="inline-form" id="book-form" hidden>
         <label>Callback time (${esc(tz)})<input type="datetime-local" id="book-time" required></label>
@@ -674,6 +674,9 @@ function campaignCard(c) {
     <div class="bar"><i style="width:${pct(st.contacted, st.total)}%"></i></div>
     <div class="row-btns">
       <button class="btn small" data-act="campaign-leads" data-id="${c.id}">View leads</button>
+      ${S.isAdmin && client?.is_demo ? `
+        <button class="btn small" data-act="campaign-edit" data-id="${c.id}">Edit script</button>
+        <button class="btn small danger" data-act="demo-delete-campaign" data-id="${c.id}">Delete demo</button>` : ''}
       ${S.isAdmin && !client?.is_demo ? `
         <button class="btn small" data-act="campaign-edit" data-id="${c.id}">Edit script</button>
         <button class="btn small" data-act="campaign-upload" data-id="${c.id}">Upload CSV</button>
@@ -698,7 +701,9 @@ function fillTemplate(t, vars) {
 
 function campaignEditor(c) {
   const isNew = !c;
-  const realClients = S.clients.filter((x) => !x.is_demo);
+  const demoClient = c && clientById(c.client_id)?.is_demo ? clientById(c.client_id) : null;
+  // A demo campaign stays in the Demo client; it can't be moved to a real one.
+  const realClients = demoClient ? [demoClient] : S.clients.filter((x) => !x.is_demo);
   c = c || {
     client_id: S.clientFilter !== 'all' ? S.clientFilter : realClients[0]?.id, name: '', niche: S.presets[0]?.slug,
     agent: { ...(S.presets[0]?.config || {}) }, send_window: { days: [1, 2, 3, 4, 5, 6], start: '09:00', end: '19:00' }, send_per_minute: 6,
@@ -707,7 +712,7 @@ function campaignEditor(c) {
   const w = c.send_window || {};
   const m = modal(isNew ? 'New campaign' : `Edit: ${c.name}`, `
     <div class="fields">
-      <label>Client<select id="ce-client">${realClients.map((x) => `<option value="${x.id}" ${x.id === c.client_id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+      <label>Client<select id="ce-client" ${demoClient ? 'disabled' : ''}>${realClients.map((x) => `<option value="${x.id}" ${x.id === c.client_id ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
       <label>Campaign name<input id="ce-name" value="${esc(c.name)}" placeholder="e.g. Dead leads Jan-Jun"></label>
       <label class="full">Niche preset<select id="ce-niche">${S.presets.map((p) => `<option value="${p.slug}" ${p.slug === c.niche ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
         <span class="small muted">Changing this replaces the script below with that niche's starting script.</span></label>
@@ -822,6 +827,55 @@ function campaignEditor(c) {
     await loadReference();
     renderCampaigns();
     if (isNew) uploadModal(res.data);
+  });
+}
+
+// Just the qualifying questions, opened from a conversation. Add, reword,
+// remove (down to one or two, or none) and reorder; the agent uses the new
+// list from its next reply.
+function questionsEditor(c) {
+  if (!c) return;
+  const m = modal(`Qualifying questions: ${c.name}`, `
+    <div class="note-box">The agent asks these one at a time, in this order, before offering a callback. Keep it to the few that matter: remove any you don't need, or remove them all and the agent goes straight to booking. Required answers decide when a lead counts as qualified.</div>
+    <div id="qe-list" style="display:grid;gap:6px"></div>
+    <button class="btn small" type="button" id="qe-add" style="justify-self:start">+ Add question</button>`,
+  `<button class="btn" data-act="close-modal">Cancel</button><button class="btn primary" id="qe-save">Save questions</button>`);
+  const list = $('#qe-list', m);
+  const addRow = (q = { key: '', question: '', required: false }) => {
+    const row = document.createElement('div');
+    row.className = 'qrow';
+    row.style.gridTemplateColumns = 'auto 1fr auto auto';
+    row.innerHTML = `<span style="display:grid;gap:2px"><button class="btn small ghost" type="button" data-mv="-1" title="Move up">▲</button><button class="btn small ghost" type="button" data-mv="1" title="Move down">▼</button></span>
+      <input data-q="question" placeholder="e.g. Do you own the home?" value="${esc(q.question)}"><input type="hidden" data-q="key" value="${esc(q.key)}">
+      <label class="small"><input type="checkbox" data-q="required" ${q.required ? 'checked' : ''}> required</label>
+      <button class="btn small ghost" type="button" data-rm title="Remove">×</button>`;
+    row.querySelector('[data-rm]').onclick = () => row.remove();
+    row.querySelectorAll('[data-mv]').forEach((b) => { b.onclick = () => {
+      const sib = b.dataset.mv === '-1' ? row.previousElementSibling : row.nextElementSibling;
+      if (sib) b.dataset.mv === '-1' ? list.insertBefore(row, sib) : list.insertBefore(sib, row);
+    }; });
+    list.appendChild(row);
+  };
+  (c.agent?.qualification_questions || []).forEach(addRow);
+  $('#qe-add', m).onclick = () => { addRow(); list.lastElementChild.querySelector('[data-q=question]').focus(); };
+  $('#qe-save', m).onclick = (e) => busy(e.target, async () => {
+    const used = new Set();
+    const questions = $$('.qrow', list).map((r) => {
+      const question = r.querySelector('[data-q=question]').value.trim();
+      // Keep a question's key when it's reworded, so answers already given
+      // stay attached. New questions get one made from their wording.
+      let key = r.querySelector('[data-q=key]').value.trim() ||
+        question.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '').split('_').slice(0, 4).join('_') || 'q';
+      while (used.has(key)) key += '_2';
+      used.add(key);
+      return { key, question, required: r.querySelector('[data-q=required]').checked };
+    }).filter((q) => q.question);
+    const { error } = await sb.from('campaigns').update({ agent: { ...(c.agent || {}), qualification_questions: questions }, updated_at: new Date().toISOString() }).eq('id', c.id);
+    if (error) throw error;
+    closeModal();
+    toast(`Saved ${questions.length} question${questions.length === 1 ? '' : 's'}. The agent uses them from its next reply.`, 'ok');
+    await loadReference();
+    renderInsights();
   });
 }
 
@@ -1250,6 +1304,22 @@ const ACT = {
   'refresh-insights': (el) => busy(el, async () => { await api('refresh_insights', { lead_id: S.lead.id }); toast('Insights updated', 'ok'); }),
   'clear-callback': (el) => busy(el, () => api('clear_callback', { lead_id: S.lead.id })),
   'book-open': () => { const f = $('#book-form'); f.hidden = !f.hidden; },
+  'questions-edit': () => questionsEditor(campaignById(S.lead.campaign_id)),
+  'demo-delete': (el) => busy(el, async () => {
+    if (!confirm(`Delete this demo with ${S.lead.first_name || 'the lead'}? The conversation is removed for good.`)) return;
+    await api('demo_delete', { lead_id: S.lead.id });
+    S.lead = null;
+    await loadReference(); renderChat(); renderInsights(); loadLeads();
+    toast('Demo deleted', 'ok');
+  }),
+  'demo-delete-campaign': (el) => busy(el, async () => {
+    const c = campaignById(el.dataset.id);
+    if (!confirm(`Delete "${c.name}" and its demo conversations? This can't be undone.`)) return;
+    await api('demo_delete', { campaign_id: c.id });
+    if (S.lead?.campaign_id === c.id) S.lead = null;
+    await loadReference(); renderCampaigns();
+    toast('Demo deleted', 'ok');
+  }),
   'demo-reset': (el) => busy(el, async () => { await api('demo_reset', { lead_id: S.lead.id }); await openLead(S.lead.id, { tab: false }); }),
 
   'campaign-new': () => campaignEditor(null),

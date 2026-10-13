@@ -438,6 +438,10 @@ function factSheet(ctx: Ctx): string {
   const known = Object.entries(lead.qualification || {}).map(([k, v]) => `- ${k}: ${v}`).join("\n");
   const questions = agent.qualification_questions
     .map((q) => `- ${q.key}: ${q.question}${q.required ? " (required)" : " (optional)"}`).join("\n");
+  // Spelled out so the agent can't lose track of what's left to ask.
+  const answered = lead.qualification || {};
+  const toAsk = agent.qualification_questions.filter((q) => !String(answered[q.key] || "").trim())
+    .map((q) => `- ${q.key}: ${q.question}`).join("\n");
 
   return `## The business
 ${agent.company_name}
@@ -448,11 +452,14 @@ Mobile: ${lead.phone}
 They enquired about: ${lead.service || agent.service}${lead.enquired_at ? ` (enquired ${lead.enquired_at})` : ""}
 ${lead.notes ? `Notes from the business: ${lead.notes}\n` : ""}${extra ? `Other details:\n${extra}\n` : ""}
 ## Qualifying questions
-Ask these naturally, one at a time, skipping anything already answered.
+Ask EVERY question below, required and optional, one at a time and in your own words, before you offer callback times. Only skip an optional one if the lead is short with you or asks to book straight away.
 ${questions || "- (none set: just confirm their interest and book the callback)"}
 
 Answers so far:
 ${known || "- none yet"}
+
+Still to ask:
+${questions ? toAsk || "- nothing: all answered, move on to booking the callback" : "- nothing"}
 ${agent.disqualifiers.length ? `\n## Disqualifiers\nIf any of these is true, politely wrap up without booking:\n${agent.disqualifiers.map((d) => `- ${d}`).join("\n")}\n` : ""}${agent.compliance_notes ? `\n## Compliance (must follow)\n${agent.compliance_notes}\n` : ""}
 ## Booking a callback
 A person from ${agent.company_name} phones the lead back. You never call anyone yourself.
@@ -470,7 +477,9 @@ function smsSystemPrompt(ctx: Ctx): string {
 ## How the conversation goes
 1. Confirm interest. If it's the wrong person, apologise briefly and stop. If they're not interested, thank them warmly and stop. Never push or argue.
 2. If they're interested, ask the qualifying questions one at a time, naturally, in your own words.
-3. Book a callback with a team member from ${agent.company_name}. Offer one or two specific times. Once they agree to a specific time, set "callback" and confirm the day and time in your reply.
+3. Once "Still to ask" is empty, book a callback with a team member from ${agent.company_name}. Offer one or two specific times.
+   When they pick one of the times you offered, even loosely ("today works", "the first one", "tomorrow's good", "yes 6:30"), that IS their agreement: set "callback" to that time straight away and confirm the day and time in your reply. Never ask them to confirm a time they've already chosen.
+   If what they said could mean more than one of the times you offered, ask which one.
 4. Once booked, keep any further replies short and helpful.
 
 ## Style
@@ -489,7 +498,7 @@ ${factSheet(ctx)}
 ## Your output
 - reply: the next text to send, or "" if nothing needs saying (for example after they say "thanks" to a goodbye).
 - lead_interested: true if the lead has shown ANY interest so far, including a plain "yes", "yep" or "that's me" to our first text, answering a qualifying question, asking about price or next steps, or agreeing to a call. False only if they have said no, wrong person, stop, or have not engaged yet.
-- callback: only when they've agreed to a specific time. local_time is "YYYY-MM-DDTHH:MM" in the business's timezone, and must be inside the callback hours. Otherwise null.
+- callback: set it as soon as they've picked or agreed a time (see step 3), including in the same turn they pick it. local_time is "YYYY-MM-DDTHH:MM" in the business's timezone, and must be inside the callback hours. Otherwise null.
 - qualification: answers learned from their LATEST messages, keyed by the question keys above. Values are short.
 - summary: 1-2 sentences on where things stand, for the business owner.
 - next_action: what the business should do next, in a few words.`;
@@ -1545,6 +1554,28 @@ async function handleApi(req: Request): Promise<Response> {
         client_id: lead.client_id, lead_id: lead.id, direction: "inbound", channel: "demo", author: "lead", body: body.slice(0, 2000),
       }).select("id").single();
       await onInbound(lead, body, msg!.id);
+      return json({ ok: true });
+    }
+
+    // Deletes a demo lead, or a whole demo campaign and its leads. Only ever
+    // demo data: a real client's leads are never touched here.
+    case "demo_delete": {
+      adminOnly();
+      let campaignId: string | null = b.campaign_id || null;
+      if (b.lead_id) {
+        const lead = await getLead(b.lead_id);
+        if (!lead.is_demo) throw new HttpError(400, "Not a demo lead");
+        campaignId = lead.campaign_id;
+        await db.from("leads").delete().eq("id", lead.id).eq("is_demo", true);
+      }
+      if (campaignId) {
+        const camp = await getCampaign(campaignId);
+        if (!camp.client?.is_demo) throw new HttpError(400, "Not a demo campaign");
+        // A whole campaign was asked for, or this was its last lead.
+        if (b.campaign_id) await db.from("leads").delete().eq("campaign_id", campaignId).eq("is_demo", true);
+        const { count } = await db.from("leads").select("id", { count: "exact", head: true }).eq("campaign_id", campaignId);
+        if (!count) await db.from("campaigns").delete().eq("id", campaignId);
+      }
       return json({ ok: true });
     }
 
