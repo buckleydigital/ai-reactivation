@@ -124,6 +124,34 @@ const clean = (v: unknown, max = 500) => {
   return s ? s.slice(0, max) : null;
 };
 
+// House rule, shared with ql-hq and ql-mc: nothing we send contains an em
+// dash. Em dashes (and spaced en dashes) become " - ", a bare en dash as in
+// "7–14 days" becomes a hyphen. Applied to every text and email on the way
+// out and to everything the model writes, so the app shows exactly what the
+// lead received.
+const EM = "(?:—|―|&mdash;|&#0*8212;|&#x0*2014;|&#0*8213;|&#x0*2015;)";
+const EN = "(?:–|&ndash;|&#0*8211;|&#x0*2013;)";
+const DASH_RULES: Array<[RegExp, string]> = [
+  [new RegExp(`^[ \\t]*(?:${EM}|${EN})[ \\t]*`, "gim"), "- "],
+  [new RegExp(`[ \\t]*${EM}[ \\t]*`, "gi"), " - "],
+  [new RegExp(`[ \\t]+${EN}[ \\t]+`, "gi"), " - "],
+  [new RegExp(EN, "gi"), "-"],
+];
+function noEmDash(s: string): string {
+  let out = s;
+  for (const [re, to] of DASH_RULES) out = out.replace(re, to);
+  return out;
+}
+function cleanDeep<T>(v: T): T {
+  if (typeof v === "string") return noEmDash(v) as T;
+  if (Array.isArray(v)) return v.map(cleanDeep) as T;
+  if (v && typeof v === "object") {
+    return Object.fromEntries(Object.entries(v as Row).map(([k, x]) => [k, cleanDeep(x)])) as T;
+  }
+  return v;
+}
+const NO_DASH_RULE = "Never use em dashes or en dashes. Use a comma, a full stop or a plain hyphen instead.";
+
 // Phones are stored E.164. Australian local formats are converted; anything
 // already international is kept as long as it looks like a phone number.
 function normalisePhone(raw: unknown): string | null {
@@ -252,7 +280,7 @@ async function twilioSend(to: string, body: string): Promise<string> {
   const r = await fetch(`https://api.twilio.com/2010-04-01/Accounts/${sid}/Messages.json`, {
     method: "POST",
     headers: { Authorization: "Basic " + btoa(`${sid}:${token}`), "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ To: to, From: from, Body: body, StatusCallback: `${FN_BASE}/twilio/status` }),
+    body: new URLSearchParams({ To: to, From: from, Body: noEmDash(body), StatusCallback: `${FN_BASE}/twilio/status` }),
   });
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.message || `Twilio error ${r.status}`);
@@ -283,7 +311,7 @@ async function openaiJSON<T = Row>(messages: Row[], name: string, schema: Row): 
   if (!r.ok) throw new Error(`OpenAI: ${j.error?.message || r.status}`);
   const content = j.choices?.[0]?.message?.content;
   if (!content) throw new Error("OpenAI returned no content" + (j.choices?.[0]?.message?.refusal ? `: ${j.choices[0].message.refusal}` : ""));
-  return JSON.parse(content) as T;
+  return cleanDeep(JSON.parse(content)) as T;
 }
 
 async function openaiPost(path: string, body: Row): Promise<Response> {
@@ -401,7 +429,7 @@ function smsSystemPrompt(ctx: Ctx): string {
 
 ## Style
 ${agent.tone}
-Write like a real person texting: short (under 300 characters), one question at a time, no lists, no emojis unless they use them first. Australian English. Use their first name occasionally, not every message.
+Write like a real person texting: short (under 300 characters), one question at a time, no lists, no emojis unless they use them first. Australian English. Use their first name occasionally, not every message. ${NO_DASH_RULE}
 
 ## Rules
 - If asked whether you're a bot or a real person, be honest: you're an AI assistant for ${agent.company_name}, and a real person from the team will call them.
@@ -428,7 +456,7 @@ When the call connects, speak first: greet them by first name, say you're ${agen
 
 ## Style
 ${agent.tone}
-You're on the phone: short sentences, one question at a time, natural and warm. Australian English. Let them finish talking. Say times the way people say them ("Thursday at 2:30").
+You're on the phone: short sentences, one question at a time, natural and warm. Australian English. ${NO_DASH_RULE} Let them finish talking. Say times the way people say them ("Thursday at 2:30").
 
 ## Tools
 - save_answer: whenever they answer a qualifying question.
@@ -522,6 +550,7 @@ function allRequiredAnswered(agent: Agent, q: Row): boolean {
 
 // Stores a message and, unless it is a demo lead, sends it by SMS.
 async function deliver(lead: Row, body: string, author: "ai" | "human" | "system", opts: { ignoreOptOut?: boolean } = {}) {
+  body = noEmDash(body);
   const now = new Date().toISOString();
   if (lead.is_demo) {
     await db.from("messages").insert({
@@ -604,14 +633,14 @@ async function notifyBooking(ctx: Ctx, at: Date, notes: string, rescheduled: boo
     await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: { Authorization: `Bearer ${resend}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
+      body: JSON.stringify(cleanDeep({
         from, to: String(client.notify_email).split(",").map((s) => s.trim()).filter(Boolean),
         subject: `${rescheduled ? "Callback moved" : "Callback booked"}: ${leadName(lead)} - ${when}`,
         html: `<p><b>${escapeXml(leadName(lead))}</b> (${escapeXml(lead.phone)}) would like a call back <b>${escapeXml(when)}</b>.</p>
 <p>Enquiry: ${escapeXml(what)}</p>${notes ? `<p>Notes: ${escapeXml(notes)}</p>` : ""}
 ${lead.summary ? `<p>Summary: ${escapeXml(lead.summary)}</p>` : ""}${q ? `<ul>${q}</ul>` : ""}
 ${env("APP_URL") ? `<p><a href="${escapeXml(env("APP_URL"))}">Open the conversation</a></p>` : ""}`,
-      }),
+      })),
     }).catch((e) => console.error("notify email:", e));
   }
 }
@@ -650,7 +679,7 @@ async function buildHandraiser(lead: Row, agent: Agent): Promise<{ text: string;
       const r = await openaiJSON<{ sms: string }>([
         {
           role: "system",
-          content: "Rewrite this SMS so it reads naturally, as if a real person typed it. Keep the meaning, the person's first name, the sender's name and the business name. Under 220 characters. No emojis, no links, no prices. Australian English. Return JSON {\"sms\": \"...\"}.",
+          content: "Rewrite this SMS so it reads naturally, as if a real person typed it. Keep the meaning, the person's first name, the sender's name and the business name. Under 220 characters. No emojis, no links, no prices, no em dashes or en dashes. Australian English. Return JSON {\"sms\": \"...\"}.",
         },
         { role: "user", content: text },
       ], "handraiser", {
@@ -803,7 +832,7 @@ async function refreshInsights(leadId: string): Promise<Row | null> {
   const r = await openaiJSON<Row>([
     {
       role: "system",
-      content: `You review a sales conversation between ${ctx.agent.company_name}'s assistant and a lead, and report where it stands for the business owner.\n\n${factSheet(ctx)}\n\nReturn: intent of the lead overall, sentiment, any qualifying answers they have given (keyed by the question keys), a 1-2 sentence summary, and the next action for the business in a few words.`,
+      content: `You review a sales conversation between ${ctx.agent.company_name}'s assistant and a lead, and report where it stands for the business owner.\n\n${factSheet(ctx)}\n\nReturn: intent of the lead overall, sentiment, any qualifying answers they have given (keyed by the question keys), a 1-2 sentence summary, and the next action for the business in a few words. ${NO_DASH_RULE}`,
     },
     { role: "user", content: transcript.slice(-24000) },
   ], "insights", INSIGHTS_SCHEMA);
@@ -1002,7 +1031,7 @@ function runSideband(ctx: Ctx, callId: string, callRef: string): Promise<void> {
     const send = (o: Row) => ws.readyState === WebSocket.OPEN && ws.send(JSON.stringify(o));
 
     const line = (direction: "inbound" | "outbound", body: string) => {
-      const text = String(body || "").trim();
+      const text = noEmDash(String(body || "")).trim();
       if (!text) return Promise.resolve();
       return db.from("messages").insert({
         client_id: lead.client_id, lead_id: lead.id, direction, channel: "voice",
