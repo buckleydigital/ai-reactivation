@@ -384,3 +384,4 @@ table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001s !important; animation-iteration-count: 1 !important; }
 }
+.tbl td.mono { white-space: nowrap; }

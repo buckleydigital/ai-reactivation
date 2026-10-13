@@ -622,7 +622,10 @@ async function deliver(lead: Row, body: string, author: "ai" | "human" | "system
 }
 
 async function optOut(lead: Row, how: string) {
-  await db.from("opt_outs").upsert({ phone: lead.phone, client_id: lead.client_id, lead_id: lead.id }, { onConflict: "phone" });
+  await db.from("opt_outs").upsert(
+    { phone: lead.phone, client_id: lead.client_id, lead_id: lead.id, reason: how },
+    { onConflict: "phone" },
+  );
   await db.from("leads").update({ status: "opted_out", ai_enabled: false, next_action: "None: opted out" }).eq("id", lead.id);
   await addEvent(lead, "opted_out", { how });
 }
@@ -1423,6 +1426,63 @@ async function handleApi(req: Request): Promise<Response> {
       const { error } = await db.auth.admin.deleteUser(String(b.user_id));
       if (error) throw new HttpError(400, error.message);
       return json({ ok: true });
+    }
+
+    // ---- Do Not Contact list -------------------------------------------------
+    // Numbers on it are never texted from the shared number, for any client.
+    case "dnc_add": {
+      adminOnly();
+      const raw = arr<unknown>(b.phones);
+      if (raw.length > 50000) throw new HttpError(400, "Add at most 50,000 numbers at a time");
+      const phones = [...new Set(raw.map(normalisePhone).filter((p): p is string => !!p))];
+      const invalid = raw.length - raw.map(normalisePhone).filter(Boolean).length;
+      const clientId = b.client_id || null;
+      const reason = b.reason === "import" ? "import" : "manual";
+      const note = clean(b.note, 300);
+      let added = 0, leadsStopped = 0;
+      for (let i = 0; i < phones.length; i += 500) {
+        const chunk = phones.slice(i, i + 500);
+        const { data, error } = await db.from("opt_outs").upsert(
+          chunk.map((phone) => ({ phone, client_id: clientId, reason, note, added_by: profile.email })),
+          { onConflict: "phone", ignoreDuplicates: true },
+        ).select("phone");
+        if (error) throw error;
+        added += data?.length || 0;
+        // Stop every lead with that number, in every client: nothing queued
+        // goes out and the AI won't answer them.
+        const { data: stopped, error: le } = await db.from("leads")
+          .update({ status: "opted_out", ai_enabled: false, reply_due_at: null, next_action: "None: on the do-not-contact list" })
+          .in("phone", chunk).eq("is_demo", false).neq("status", "opted_out")
+          .select("id, client_id");
+        if (le) throw le;
+        leadsStopped += stopped?.length || 0;
+        if (stopped?.length) {
+          await db.from("lead_events").insert(stopped.map((l) => ({
+            client_id: l.client_id, lead_id: l.id, type: "opted_out",
+            data: { how: reason === "import" ? "uploaded do-not-contact list" : "added to do-not-contact list", by: profile.email },
+          })));
+        }
+      }
+      return json({ added, already_listed: phones.length - added, invalid, leads_stopped: leadsStopped });
+    }
+
+    case "dnc_remove": {
+      adminOnly();
+      const phone = normalisePhone(b.phone);
+      if (!phone) throw new HttpError(400, "That isn't a valid number");
+      const { data: gone, error } = await db.from("opt_outs").delete().eq("phone", phone).select("phone");
+      if (error) throw error;
+      if (!gone?.length) throw new HttpError(404, "That number isn't on the list");
+      // Their leads come back where they were, with the AI left OFF: someone
+      // decides to turn it back on, per lead.
+      const { data: leads } = await db.from("leads").select("id, client_id, replied_at, contacted_at")
+        .eq("phone", phone).eq("status", "opted_out");
+      for (const l of leads || []) {
+        const status = l.replied_at ? "replied" : l.contacted_at ? "contacted" : "new";
+        await db.from("leads").update({ status, next_action: "Back in contact: turn the AI on if wanted" }).eq("id", l.id);
+        await addEvent(l, "opted_back_in", { by: profile.email, reason: clean(b.reason, 300) });
+      }
+      return json({ ok: true, leads_restored: leads?.length || 0 });
     }
 
     // ---- Demo ---------------------------------------------------------------
