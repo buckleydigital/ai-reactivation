@@ -1322,7 +1322,7 @@ async function demoEmails(r: Row, settings: Row) {
 <p>We'll contact you at that time${r.phone ? ` on ${escapeXml(r.phone)}` : ""}. A calendar invite is attached.</p>
 <p>Need to change the time, or have a question first? Just reply to this email.</p>
 <p>Talk soon,<br>The QuoteLeads team</p>
-<p style="color:#889;font-size:12px">You're receiving this because you booked a demo at reactivate.quoteleads.com.au. QuoteLeads, ABN 83 894 208 171.</p>`,
+<p style="color:#889;font-size:12px">You're receiving this because you booked a demo at reactivate.quoteleads.com.au. QuoteLeads.</p>`,
     attachments: ics("Reactivate demo with QuoteLeads"),
   });
 }
