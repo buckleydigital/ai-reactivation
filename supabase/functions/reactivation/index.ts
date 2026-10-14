@@ -11,7 +11,7 @@
 //   POST /twilio/voice   Twilio: a call came in on the shared number
 //   POST /openai/call    OpenAI: the call has reached the Realtime API
 //   POST /twilio/dial-done  Twilio: the AI call ended (its length is billed)
-//   POST /stripe/webhook    Stripe: a credit pack was paid, or a card saved
+//   POST /stripe/webhook    Stripe: a card was saved
 //   POST /billing/charge    weekly booking charges, called by pg_cron
 //   POST /public/demo-slots open demo times (website, no login)
 //   POST /public/demo-book  book a demo (website, no login)
@@ -797,7 +797,7 @@ async function buildHandraiser(lead: Row, agent: Agent): Promise<{ text: string;
   return { text, variant };
 }
 
-// Returns false when billing stopped it (out of credits, no card...), so the
+// Returns false when billing stopped it (no card, cap reached...), so the
 // send queue stops this client's batch. The lead goes back in the queue.
 async function sendHandraiser(lead: Row, campaign: Row, client: Row): Promise<boolean> {
   try {
@@ -982,11 +982,9 @@ async function refreshInsights(leadId: string): Promise<Row | null> {
 // =============================================================================
 // Billing
 // =============================================================================
-// Each client is on one of three modes (clients.billing_mode):
+// Each client is on one of two modes (clients.billing_mode):
 //   per_booking  card saved in Stripe; every callback the agent books is
 //                charged once, after a dispute window, in a weekly run
-//   credits      prepaid packs, no card; 1 credit per SMS segment in or out,
-//                credits_per_call_minute per call minute
 //   invoice      usage is recorded; you bill them outside the app
 // Usage is recorded in every mode, so you can see volume and margin.
 
@@ -1016,17 +1014,10 @@ function smsSegments(text: string): number {
   return units <= 160 ? 1 : Math.ceil(units / 153);
 }
 
-// Records usage and, in credits mode, takes the credits off. Bookings are
-// recorded but never cost credits.
+// Records usage, for volume and margin. What a client pays is set by bookings.
 async function recordUsage(client: Row, leadId: string | null, kind: "sms_out" | "sms_in" | "call_minutes" | "booking", quantity: number, ref?: string) {
   if (!(quantity > 0)) return;
-  const credits = client.billing_mode !== "credits" || kind === "booking" ? 0
-    : kind === "call_minutes" ? quantity * (client.credits_per_call_minute ?? 10) : quantity;
-  await db.from("usage").insert({ client_id: client.id, lead_id: leadId, kind, quantity, credits, ref: ref || null });
-  if (credits) {
-    const { data: bal } = await db.rpc("use_credits", { p_client: client.id, p_credits: credits });
-    if (typeof bal === "number") client.credit_balance = bal;
-  }
+  await db.from("usage").insert({ client_id: client.id, lead_id: leadId, kind, quantity, ref: ref || null });
 }
 
 function monthStartUtc(client: Row): string {
@@ -1041,14 +1032,10 @@ async function bookingsThisMonth(client: Row): Promise<number> {
   return count || 0;
 }
 
-// Why this client can't send right now, or null if it can. A handraiser
-// starts a new conversation; a reply carries on one that's already going, so
-// replies are allowed further (a lead mid-booking isn't dropped).
+// Why this client can't send right now, or null if it can. Only new
+// conversations (handraisers) are stopped; a reply carries on one that's
+// already going, so a lead mid-booking isn't dropped.
 async function sendBlock(client: Row, kind: "handraiser" | "reply"): Promise<string | null> {
-  if (client.billing_mode === "credits") {
-    const floor = kind === "handraiser" ? 0 : -(client.credit_overdraft ?? 50);
-    if ((client.credit_balance ?? 0) <= floor) return "Out of credits";
-  }
   if (client.billing_mode === "per_booking" && kind === "handraiser") {
     if (!client.stripe_payment_method_id) return "No card on file";
     const { count: failed } = await db.from("booking_charges").select("id", { count: "exact", head: true })
@@ -1143,16 +1130,6 @@ async function handleStripeWebhook(req: Request): Promise<Response> {
   if (ev.type !== "checkout.session.completed" || obj.metadata?.app !== "reactivation") return json({ received: true });
   const client = await getClient(obj.metadata.client_id);
   if (!client) return json({ received: true });
-
-  if (obj.metadata.type === "rx_credits" && obj.payment_status === "paid") {
-    const credits = Number(obj.metadata.credits || 0);
-    if (credits > 0) {
-      await db.rpc("apply_credits", {
-        p_client: client.id, p_delta: credits, p_reason: "purchase", p_session: obj.id,
-        p_amount: obj.amount_total ?? null, p_note: `${credits.toLocaleString("en-AU")} credits`, p_by: obj.customer_details?.email || null,
-      });
-    }
-  }
 
   if (obj.metadata.type === "rx_card_setup" && obj.setup_intent) {
     const si = await stripe(`/setup_intents/${obj.setup_intent}`, null);
@@ -1447,7 +1424,7 @@ async function handleTwilioVoice(req: Request): Promise<Response> {
   const project = env("OPENAI_PROJECT_ID"), sipSecret = env("SIP_HEADER_SECRET");
   if (!lead) return twiml("<Reject/>");
   const billing = await getClient(lead.client_id);
-  if (billing && await sendBlock(billing, "reply")) return twiml("<Reject/>"); // out of credits, past the overdraft
+  if (billing && await sendBlock(billing, "reply")) return twiml("<Reject/>");
   if (!project || !sipSecret) {
     console.error("Calls need OPENAI_PROJECT_ID and SIP_HEADER_SECRET");
     return twiml("<Reject/>");
@@ -1711,7 +1688,7 @@ async function handleCron(req: Request): Promise<Response> {
     const client = c.client as Row;
     if (!client || client.is_demo || !client.active) continue;
     if (!inWindow(new Date(), client.timezone || "Australia/Sydney", c.send_window)) continue;
-    if (await sendBlock(client, "handraiser")) continue; // out of credits, no card, cap reached...
+    if (await sendBlock(client, "handraiser")) continue; // no card, cap reached...
     const take = Math.min(c.send_per_minute || 6, cap - sent);
     if (take <= 0) break;
     const { data: claimed, error } = await db.rpc("claim_queued_leads", { p_campaign: c.id, p_limit: take });
@@ -1954,38 +1931,6 @@ async function handleApi(req: Request): Promise<Response> {
     }
 
     // ---- Billing -------------------------------------------------------------
-    case "credits_checkout": {
-      const client = await getClient(String(b.client_id || profile.client_id));
-      if (!client || (!isAdmin && client.id !== profile.client_id)) throw new HttpError(404, "Client not found");
-      if (client.billing_mode !== "credits") throw new HttpError(400, "This account isn't on prepaid credits");
-      if (!(client.price_per_1000_credits_cents > 0)) throw new HttpError(400, "No credit price is set for this account yet");
-      const credits = Math.round(Number(b.credits) / 500) * 500;
-      if (!(credits >= 500 && credits <= 200000)) throw new HttpError(400, "Choose between 500 and 200,000 credits");
-      const amount = Math.round(client.price_per_1000_credits_cents * credits / 1000);
-      const session = await stripe("/checkout/sessions", {
-        mode: "payment",
-        "line_items[0][quantity]": 1,
-        "line_items[0][price_data][currency]": "aud",
-        "line_items[0][price_data][unit_amount]": amount,
-        "line_items[0][price_data][product_data][name]": `${credits.toLocaleString("en-AU")} credits`,
-        "line_items[0][price_data][product_data][description]": "1 credit per SMS segment sent or received",
-        // GST as its own line, so the receipt shows it.
-        ...(GST_RATE > 0 ? {
-          "line_items[1][quantity]": 1,
-          "line_items[1][price_data][currency]": "aud",
-          "line_items[1][price_data][unit_amount]": gstOn(amount),
-          "line_items[1][price_data][product_data][name]": `GST (${Math.round(GST_RATE * 100)}%)`,
-        } : {}),
-        customer: client.stripe_customer_id || undefined,
-        customer_email: client.stripe_customer_id ? undefined : client.billing_email || profile.email || undefined,
-        client_reference_id: client.id,
-        success_url: `${billingUrl()}-done`, cancel_url: `${billingUrl()}`,
-        ...META(client, "rx_credits"), "metadata[credits]": credits,
-        ...META(client, "rx_credits", "payment_intent_data[metadata]"),
-      });
-      return json({ url: session.url });
-    }
-
     case "card_setup": {
       const client = await getClient(String(b.client_id || profile.client_id));
       if (!client || (!isAdmin && client.id !== profile.client_id)) throw new HttpError(404, "Client not found");
@@ -2023,17 +1968,6 @@ async function handleApi(req: Request): Promise<Response> {
         resolution_note: clean(b.note, 500), resolved_by: profile.email,
       }).eq("id", ch.id);
       return json({ ok: true });
-    }
-
-    case "credits_adjust": {
-      adminOnly();
-      const delta = Math.trunc(Number(b.delta));
-      if (!delta) throw new HttpError(400, "Enter how many credits to add or take away");
-      const balance = await db.rpc("apply_credits", {
-        p_client: b.client_id, p_delta: delta, p_reason: "adjustment", p_note: clean(b.note, 300), p_by: profile.email,
-      });
-      if (balance.error) throw balance.error;
-      return json({ balance: balance.data });
     }
 
     case "billing_charge_now": {

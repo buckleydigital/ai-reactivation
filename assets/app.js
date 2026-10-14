@@ -335,7 +335,7 @@ function onCall({ new: row }) {
 // Views & tabs
 // ---------------------------------------------------------------------------
 function setView(v) {
-  // Back from Stripe: credits and cards arrive by webhook a moment later.
+  // Back from Stripe: cards arrive by webhook a moment later.
   if (v === 'billing-done') { v = 'billing'; toast('Thanks, payment details received. It can take a few seconds to show here.', 'ok'); setTimeout(() => S.view === 'billing' && renderBilling(), 4000); }
   if (!['inbox', 'campaigns', 'clients', 'users', 'dnc', 'billing', 'demos'].includes(v)) v = 'inbox';
   if (!S.isAdmin && ['clients', 'users', 'dnc', 'demos'].includes(v)) v = 'inbox';
@@ -1255,12 +1255,11 @@ async function dncExport(btn) {
 // ---------------------------------------------------------------------------
 // Billing
 // Admin, all clients: an overview. One client (or a client user): their mode,
-// balance or bookings, usage this month, and the actions that go with them.
+// bookings, usage this month, and the actions that go with them.
 // ---------------------------------------------------------------------------
 const money = (cents) => `$${((cents || 0) / 100).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const MODE_LABEL = { per_booking: 'Pay per booking', credits: 'Prepaid credits', invoice: 'Invoiced' };
+const MODE_LABEL = { per_booking: 'Pay per booking', invoice: 'Invoiced' };
 const CHARGE_TONE = { pending: 'info', disputed: 'warm', waived: 'mute', charging: 'info', charged: 'good', failed: 'bad' };
-const CREDIT_PACKS = [1000, 5000, 10000, 25000];
 const DISPUTE_HOURS = 48;
 // Prices are stored excluding GST; GST is added when charging.
 const GST = CFG.gstRate ?? 0.1;
@@ -1272,8 +1271,8 @@ function monthKey() {
 }
 
 function usageTotals(rows) {
-  const t = { sms_out: 0, sms_in: 0, call_minutes: 0, booking: 0, credits: 0 };
-  for (const r of rows) { t[r.kind] = (t[r.kind] || 0) + r.quantity; t.credits += r.credits || 0; }
+  const t = { sms_out: 0, sms_in: 0, call_minutes: 0, booking: 0 };
+  for (const r of rows) t[r.kind] = (t[r.kind] || 0) + r.quantity;
   return t;
 }
 const estCost = (t) => (t.sms_out + t.sms_in) * CFG.costs.smsSegmentCents + t.call_minutes * CFG.costs.callMinuteCents;
@@ -1284,32 +1283,18 @@ async function renderBilling() {
   if (!id) return renderBillingOverview(el);
   const { data: client } = await sb.from('clients').select('*').eq('id', id).maybeSingle();
   if (!client) { el.innerHTML = '<div class="card empty">Client not found.</div>'; return; }
-  const [usage, ledger, charges] = await Promise.all([
+  const [usage, charges] = await Promise.all([
     sb.from('usage_monthly').select('*').eq('client_id', id).eq('month', monthKey()),
-    sb.from('credit_ledger').select('*').eq('client_id', id).order('created_at', { ascending: false }).limit(30),
     sb.from('booking_charges').select('*').eq('client_id', id).order('booked_at', { ascending: false }).limit(100),
   ]);
   const t = usageTotals(usage.data || []);
   const ch = charges.data || [];
   const monthStart = new Date(monthKey() + 'T00:00:00+10:00');
   const monthCharges = ch.filter((c) => new Date(c.booked_at) >= monthStart && c.status !== 'waived');
-  const revenue = client.billing_mode === 'per_booking' ? monthCharges.reduce((a, c) => a + c.amount_cents, 0)
-    : client.billing_mode === 'credits' ? Math.round((ledger.data || []).filter((l) => l.reason === 'purchase' && new Date(l.created_at) >= monthStart).reduce((a, l) => a + (l.amount_cents || 0), 0) / (1 + GST)) : 0;
+  const revenue = client.billing_mode === 'per_booking' ? monthCharges.reduce((a, c) => a + c.amount_cents, 0) : 0;
 
   let main = '';
-  if (client.billing_mode === 'credits') {
-    const low = client.credit_balance <= 0;
-    main = `<div class="card"><h4>Credit balance</h4>
-      <div style="font-size:34px;font-weight:700;color:${low ? 'var(--bad)' : 'var(--good)'}">${(client.credit_balance || 0).toLocaleString('en-AU')}</div>
-      <div class="small muted">1 credit per SMS segment sent or received · ${client.credits_per_call_minute} credits per call minute${low ? '<br><b style="color:var(--bad)">New handraisers are paused until you top up.</b> Conversations already going carry on for a little while.' : ''}</div>
-      ${client.price_per_1000_credits_cents > 0 ? `<div class="row-btns" style="margin-top:12px">${CREDIT_PACKS.map((n) => `<button class="btn ${n === 5000 ? 'primary' : ''}" data-act="buy-credits" data-n="${n}" data-client="${client.id}">${n.toLocaleString('en-AU')} credits · ${money(client.price_per_1000_credits_cents * n / 1000)}${plusGst}</button>`).join('')}</div>
-        <div class="small muted" style="margin-top:6px">Paid securely by card through Stripe. Nothing is saved for next time.</div>` : '<div class="small muted" style="margin-top:8px">Credit price not set yet.</div>'}
-    </div>
-    <div class="card table-wrap"><h4>Credit history</h4>${(ledger.data || []).length ? `<table class="tbl"><thead><tr><th>When</th><th>Change</th><th>Balance</th><th>Details</th></tr></thead><tbody>
-      ${(ledger.data || []).map((l) => `<tr><td class="small">${esc(fmtWhen(l.created_at))}</td><td style="color:${l.delta > 0 ? 'var(--good)' : 'var(--bad)'}">${l.delta > 0 ? '+' : ''}${l.delta.toLocaleString('en-AU')}</td><td>${l.balance_after.toLocaleString('en-AU')}</td>
-        <td class="small">${esc(l.reason === 'purchase' ? `Purchase ${l.amount_cents != null ? `${money(l.amount_cents)} incl. GST` : ''}` : l.reason === 'adjustment' ? `Adjusted${l.created_by ? ` by ${l.created_by}` : ''}` : l.reason)}${l.note ? ` · ${esc(l.note)}` : ''}</td></tr>`).join('')}</tbody></table>`
-      : '<div class="small muted">No purchases yet. Usage is itemised below.</div>'}</div>`;
-  } else if (client.billing_mode === 'per_booking') {
+  if (client.billing_mode === 'per_booking') {
     const cap = client.monthly_booking_cap;
     main = `<div class="card"><h4>Card on file</h4>
       ${client.stripe_payment_method_id ? `<div style="font-size:18px;font-weight:600">${esc((client.card_brand || 'Card').replace(/^./, (x) => x.toUpperCase()))} •••• ${esc(client.card_last4 || '')}</div>`
@@ -1341,7 +1326,7 @@ async function renderBilling() {
       <div class="stat"><b>${t.sms_in.toLocaleString('en-AU')}</b><span>SMS received</span></div>
       <div class="stat"><b>${t.call_minutes}</b><span>Call mins</span></div>
       <div class="stat good"><b>${t.booking}</b><span>Booked</span></div></div>
-    <div class="small muted" style="margin-top:8px">SMS counted in segments (160 characters each, 70 with emoji).${client.billing_mode === 'credits' ? ` ${t.credits.toLocaleString('en-AU')} credits used.` : ''}</div>
+    <div class="small muted" style="margin-top:8px">SMS counted in segments (160 characters each, 70 with emoji).</div>
     ${S.isAdmin ? `<div class="note-box" style="margin-top:10px">Admin only. Revenue this month (excl. GST) <b>${money(revenue)}</b> · estimated cost <b>${money(estCost(t))}</b> · margin <b>${money(revenue - estCost(t))}</b><br><span class="muted">Cost is an estimate from config.js (${CFG.costs.smsSegmentCents}c per segment, ${CFG.costs.callMinuteCents}c per call minute) plus OpenAI, which isn't counted.</span></div>` : ''}
   </div>`;
 
@@ -1351,14 +1336,8 @@ async function renderBilling() {
       <label>Billing email (receipts)<input id="bs-email" value="${esc(client.billing_email || '')}" placeholder="${esc(client.notify_email || '')}"></label>
       <label>Price per booking ($, excl. GST)<input id="bs-booking" type="number" min="0" step="0.01" value="${(client.price_per_booking_cents / 100).toFixed(2)}"></label>
       <label>Monthly booking cap (blank = none)<input id="bs-cap" type="number" min="0" value="${client.monthly_booking_cap ?? ''}"></label>
-      <label>Price per 1,000 credits ($, excl. GST)<input id="bs-credits" type="number" min="0" step="0.01" value="${(client.price_per_1000_credits_cents / 100).toFixed(2)}"></label>
-      <label>Credits per call minute<input id="bs-minute" type="number" min="0" value="${client.credits_per_call_minute}"></label>
-      <label>Overdraft for live conversations (credits)<input id="bs-overdraft" type="number" min="0" value="${client.credit_overdraft}"></label>
     </div>
     <div class="row-btns" style="margin-top:10px"><button class="btn primary" data-act="billing-save" data-client="${client.id}">Save settings</button></div>
-    ${client.billing_mode === 'credits' ? `<div class="inline-form" style="grid-template-columns:120px 1fr auto;align-items:end;margin-top:14px">
-      <label>Adjust credits<input id="bs-adj" type="number" placeholder="+500 or -200"></label><label>Note<input id="bs-adj-note" placeholder="e.g. Goodwill credit"></label>
-      <button class="btn" data-act="credits-adjust" data-client="${client.id}">Apply</button></div>` : ''}
   </div>` : '';
 
   el.innerHTML = `<div class="page-head"><h2>Billing${S.isAdmin ? `: ${esc(client.name)}` : ''}</h2><span class="pill hud">${esc(MODE_LABEL[client.billing_mode])}</span><span class="grow"></span>
@@ -1376,14 +1355,13 @@ async function renderBillingOverview(el) {
   const rows = (clients || real).map((c) => {
     const t = usageTotals((usage || []).filter((u) => u.client_id === c.id));
     const open = (pending || []).filter((p) => p.client_id === c.id);
-    const state = c.billing_mode === 'credits' ? `${(c.credit_balance || 0).toLocaleString('en-AU')} credits`
-      : c.billing_mode === 'per_booking' ? `${c.stripe_payment_method_id ? `${esc(c.card_brand || 'card')} •••• ${esc(c.card_last4 || '')}` : '<span style="color:var(--bad)">No card</span>'}${open.length ? ` · ${open.length} due ${money(open.reduce((a, p) => a + p.amount_cents, 0))}${plusGst}` : ''}${open.some((p) => p.status === 'failed') ? ' · <span style="color:var(--bad)">failed charge</span>' : ''}${open.some((p) => p.status === 'disputed') ? ' · <span style="color:var(--warm)">dispute</span>' : ''}`
+    const state = c.billing_mode === 'per_booking' ? `${c.stripe_payment_method_id ? `${esc(c.card_brand || 'card')} •••• ${esc(c.card_last4 || '')}` : '<span style="color:var(--bad)">No card</span>'}${open.length ? ` · ${open.length} due ${money(open.reduce((a, p) => a + p.amount_cents, 0))}${plusGst}` : ''}${open.some((p) => p.status === 'failed') ? ' · <span style="color:var(--bad)">failed charge</span>' : ''}${open.some((p) => p.status === 'disputed') ? ' · <span style="color:var(--warm)">dispute</span>' : ''}`
       : '-';
     return `<tr><td><button class="link" data-act="billing-client" data-id="${c.id}">${esc(c.name)}</button></td><td>${esc(MODE_LABEL[c.billing_mode] || c.billing_mode)}</td><td class="small">${state}</td>
       <td>${(t.sms_out + t.sms_in).toLocaleString('en-AU')}</td><td>${t.call_minutes}</td><td>${t.booking}</td><td class="small">${money(estCost(t))}</td></tr>`;
   });
   el.innerHTML = `<div class="page-head"><h2>Billing</h2><span class="grow"></span><button class="btn small" data-act="billing-refresh">↻ Refresh</button></div>
-    <div class="note-box" style="margin-bottom:14px">Pick a client to set their billing mode and prices, buy or adjust credits, or deal with booking charges. Booking charges run every Monday morning for bookings older than ${DISPUTE_HOURS} hours.</div>
+    <div class="note-box" style="margin-bottom:14px">Pick a client to set their billing mode and price, or deal with booking charges. Booking charges run every Monday morning for bookings older than ${DISPUTE_HOURS} hours.</div>
     ${rows.length ? `<div class="card table-wrap"><table class="tbl"><thead><tr><th>Client</th><th>Mode</th><th>Status</th><th>SMS this month</th><th>Call mins</th><th>Booked</th><th>Est. cost</th></tr></thead><tbody>${rows.join('')}</tbody></table></div>`
       : '<div class="card empty">No clients yet.</div>'}`;
 }
@@ -1607,7 +1585,6 @@ const ACT = {
   'billing-all': () => { S.clientFilter = 'all'; renderClientFilter(); renderBilling(); },
   'billing-client': (el) => { S.clientFilter = el.dataset.id; renderClientFilter(); renderCampaignFilter(); renderBilling(); },
   'open-lead': (el) => { setView('inbox'); openLead(el.dataset.id); },
-  'buy-credits': (el) => busy(el, async () => { location.href = (await api('credits_checkout', { client_id: el.dataset.client, credits: +el.dataset.n })).url; }),
   'card-setup': (el) => busy(el, async () => { location.href = (await api('card_setup', { client_id: el.dataset.client })).url; }),
   'charge-now': (el) => busy(el, async () => {
     if (!confirm('Charge this client now for every booking past the dispute window?')) return;
@@ -1634,19 +1611,12 @@ const ACT = {
     const capRaw = $('#bs-cap').value.trim();
     const { error } = await sb.from('clients').update({
       billing_mode: $('#bs-mode').value, billing_email: $('#bs-email').value.trim() || null,
-      price_per_booking_cents: cents('#bs-booking'), price_per_1000_credits_cents: cents('#bs-credits'),
-      credits_per_call_minute: Math.max(0, parseInt($('#bs-minute').value, 10) || 0),
-      credit_overdraft: Math.max(0, parseInt($('#bs-overdraft').value, 10) || 0),
+      price_per_booking_cents: cents('#bs-booking'),
       monthly_booking_cap: capRaw === '' ? null : Math.max(0, parseInt(capRaw, 10) || 0),
     }).eq('id', el.dataset.client);
     if (error) throw error;
     toast('Billing settings saved', 'ok');
     await loadReference();
-    renderBilling();
-  }),
-  'credits-adjust': (el) => busy(el, async () => {
-    const r = await api('credits_adjust', { client_id: el.dataset.client, delta: +$('#bs-adj').value, note: $('#bs-adj-note').value });
-    toast(`Balance now ${Number(r.balance).toLocaleString('en-AU')} credits`, 'ok');
     renderBilling();
   }),
   'dnc-add': dncAddModal,
